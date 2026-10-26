@@ -1,0 +1,1 @@
+export default function Home(){return <main><h1>WhatsApp Bulk Message</h1><p>Standalone multi-business SaaS — development scaffold</p><p>Official Meta sending will require authenticated onboarding, approved templates, consent checks and webhooks.</p></main>}
