@@ -1,0 +1,7 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+model Tenant { id String @id @default(cuid()) name String memberships Membership[] contacts Contact[] campaigns Campaign[] createdAt DateTime @default(now()) }
+model User { id String @id @default(cuid()) email String @unique passwordHash String memberships Membership[] createdAt DateTime @default(now()) }
+model Membership { id String @id @default(cuid()) tenantId String userId String role String tenant Tenant @relation(fields:[tenantId],references:[id]) user User @relation(fields:[userId],references:[id]) @@unique([tenantId,userId]) }
+model Contact { id String @id @default(cuid()) tenantId String name String? phone String consent Boolean @default(false) tenant Tenant @relation(fields:[tenantId],references:[id]) createdAt DateTime @default(now()) @@unique([tenantId,phone]) }
+model Campaign { id String @id @default(cuid()) tenantId String name String templateName String status String @default("DRAFT") tenant Tenant @relation(fields:[tenantId],references:[id]) createdAt DateTime @default(now()) }
