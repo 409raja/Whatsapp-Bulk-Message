@@ -37,6 +37,19 @@ app.post('/api/v1/contacts',auth,handler(async(req:any,res:any)=>{
  const contact=await db.contact.upsert({where:{tenantId_phone:{tenantId:req.user.tenantId,phone:parsed.data.phone}},create:{tenantId:req.user.tenantId,...parsed.data},update:{name:parsed.data.name,consent:true}});
  res.status(201).json(contact);
 }));
+app.post('/api/v1/contacts/import',auth,handler(async(req:any,res:any)=>{
+ const parsed=z.object({contacts:z.array(z.object({phone:z.string().regex(/^\\+[1-9]\\d{7,14}$/),name:z.string().max(120).optional(),consent:z.literal(true)})).min(1).max(500)}).safeParse(req.body);
+ if(!parsed.success)return res.status(400).json({error:'Provide up to 500 opted-in contacts with valid E.164 numbers'});
+ const unique=[...new Map(parsed.data.contacts.map(c=>[c.phone,c])).values()];
+ let imported=0;
+ for(const c of unique){await db.contact.upsert({where:{tenantId_phone:{tenantId:req.user.tenantId,phone:c.phone}},create:{...c,tenantId:req.user.tenantId},update:{name:c.name,consent:true}});imported++}
+ res.json({imported,duplicates:parsed.data.contacts.length-imported});
+}));
+app.post('/api/v1/contacts/:id/opt-out',auth,handler(async(req:any,res:any)=>{
+ const result=await db.contact.updateMany({where:{id:req.params.id,tenantId:req.user.tenantId},data:{consent:false}});
+ if(!result.count)return res.status(404).json({error:'Contact not found'});
+ res.json({suppressed:true});
+}));
 app.get('/api/v1/campaigns',auth,handler(async(req:any,res:any)=>res.json(await db.campaign.findMany({where:{tenantId:req.user.tenantId},orderBy:{createdAt:'desc'},take:100}))));
 app.post('/api/v1/campaigns',auth,handler(async(req:any,res:any)=>{
  const parsed=z.object({name:z.string().min(2),templateName:z.string().min(1)}).safeParse(req.body);
