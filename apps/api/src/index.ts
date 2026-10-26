@@ -1,7 +1,48 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-const app=express();app.use(cors({origin:process.env.WEB_ORIGIN||'http://localhost:3000'}));app.use(express.json());
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { PrismaClient } from '@prisma/client';
+import { z } from 'zod';
+const db = new PrismaClient();
+const app = express();
+app.use(cors({origin: process.env.WEB_ORIGIN || 'http://localhost:3000'}));
+app.use(express.json({limit:'1mb'}));
+const secret=process.env.JWT_SECRET;
+if (!secret || secret.length<32) throw new Error('Set JWT_SECRET (at least 32 characters)');
+const handler=(fn:any)=>(req:any,res:any,next:any)=>Promise.resolve(fn(req,res,next)).catch(next);
+function auth(req:any,res:any,next:any){try{const token=(req.headers.authorization||'').replace(/^Bearer /,'');const payload=jwt.verify(token,secret!) as any;req.user=payload;next()}catch{return res.status(401).json({error:'Unauthorized'})}}
 app.get('/health',(_req,res)=>res.json({status:'ok'}));
-app.post('/api/v1/campaigns/:id/start',(_req,res)=>res.status(501).json({error:'Sending disabled pending provider and compliance checks'}));
-app.listen(Number(process.env.PORT||4000),()=>console.log('API ready'));
+app.post('/api/v1/auth/register',handler(async(req:any,res:any)=>{
+ const parsed=z.object({business:z.string().min(2),email:z.string().email(),password:z.string().min(10)}).safeParse(req.body);
+ if(!parsed.success)return res.status(400).json({error:'Invalid registration data'});
+ const {business,email,password}=parsed.data;
+ if(await db.user.findUnique({where:{email}}))return res.status(409).json({error:'Email already registered'});
+ const user=await db.$transaction(async tx=>{const tenant=await tx.tenant.create({data:{name:business}});return tx.user.create({data:{email,passwordHash:await bcrypt.hash(password,12),memberships:{create:{tenantId:tenant.id,role:'OWNER'}}}})});
+ res.status(201).json({userId:user.id});
+}));
+app.post('/api/v1/auth/login',handler(async(req:any,res:any)=>{
+ const parsed=z.object({email:z.string().email(),password:z.string()}).safeParse(req.body);
+ if(!parsed.success)return res.status(400).json({error:'Invalid credentials'});
+ const user=await db.user.findUnique({where:{email:parsed.data.email},include:{memberships:true}});
+ if(!user||!await bcrypt.compare(parsed.data.password,user.passwordHash))return res.status(401).json({error:'Invalid credentials'});
+ const membership=user.memberships[0];if(!membership)return res.status(403).json({error:'No business membership'});
+ res.json({token:jwt.sign({sub:user.id,tenantId:membership.tenantId,role:membership.role},secret!,{expiresIn:'8h'})});
+}));
+app.get('/api/v1/contacts',auth,handler(async(req:any,res:any)=>res.json(await db.contact.findMany({where:{tenantId:req.user.tenantId},orderBy:{createdAt:'desc'},take:100}))));
+app.post('/api/v1/contacts',auth,handler(async(req:any,res:any)=>{
+ const parsed=z.object({name:z.string().max(120).optional(),phone:z.string().regex(/^\+[1-9]\d{7,14}$/),consent:z.literal(true)}).safeParse(req.body);
+ if(!parsed.success)return res.status(400).json({error:'Valid E.164 phone and explicit consent required'});
+ const contact=await db.contact.upsert({where:{tenantId_phone:{tenantId:req.user.tenantId,phone:parsed.data.phone}},create:{tenantId:req.user.tenantId,...parsed.data},update:{name:parsed.data.name,consent:true}});
+ res.status(201).json(contact);
+}));
+app.get('/api/v1/campaigns',auth,handler(async(req:any,res:any)=>res.json(await db.campaign.findMany({where:{tenantId:req.user.tenantId},orderBy:{createdAt:'desc'},take:100}))));
+app.post('/api/v1/campaigns',auth,handler(async(req:any,res:any)=>{
+ const parsed=z.object({name:z.string().min(2),templateName:z.string().min(1)}).safeParse(req.body);
+ if(!parsed.success)return res.status(400).json({error:'Invalid campaign'});
+ res.status(201).json(await db.campaign.create({data:{tenantId:req.user.tenantId,...parsed.data,status:'DRAFT'}}));
+}));
+app.post('/api/v1/campaigns/:id/start',auth,(_req,res)=>res.status(501).json({error:'Sending disabled until official provider, template validation, opt-out and durable queue are configured'}));
+app.use((err:any,_req:any,res:any,_next:any)=>{console.error(err);res.status(500).json({error:'Internal server error'})});
+app.listen(Number(process.env.PORT||4000),()=>console.log('API listening'));
