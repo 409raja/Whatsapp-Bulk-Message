@@ -2,7 +2,7 @@
 'use client';
 
 import ContactsManager from './ContactsManager';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import CampaignsManager from './CampaignsManager';
 import WhatsAppConnectionsManager from './WhatsAppConnectionsManager';
 
@@ -212,22 +212,6 @@ export default function Home() {
     setMode('login');
   }
 
-  const cardStyle: CSSProperties = {
-    background: 'white',
-    padding: 24,
-    borderRadius: 12,
-    boxShadow: '0 3px 16px #ddd',
-  };
-
-  const buttonStyle: CSSProperties = {
-    padding: '12px 18px',
-    background: '#1769aa',
-    color: 'white',
-    border: 0,
-    borderRadius: 6,
-    cursor: 'pointer',
-  };
-
   // Prevent login screen flashing during refresh
   if (!sessionChecked) {
     return (
@@ -238,287 +222,149 @@ export default function Home() {
     );
   }
 
-  // Professional dashboard after login
+
   if (token) {
     const navigation = [
-      { id: 'overview', label: 'Overview', symbol: '◫' },
-      { id: 'contacts', label: 'Contacts', symbol: '♙' },
-      { id: 'campaigns', label: 'Campaigns', symbol: '▤' },
-      { id: 'whatsapp', label: 'WhatsApp Accounts', symbol: '◉' },
+      { id: 'overview', label: 'Overview', icon: '◫' },
+      { id: 'contacts', label: 'Contacts', icon: '◎' },
+      { id: 'campaigns', label: 'Campaigns', icon: '▤' },
+      { id: 'whatsapp', label: 'WhatsApp Accounts', icon: '◉' },
     ] as const;
-
-    const titles = {
+    const pageNames = {
       overview: 'Overview',
       contacts: 'Contacts',
       campaigns: 'Campaigns',
       whatsapp: 'WhatsApp Accounts',
     };
-
     return (
-      <div className="saas-shell">
-        <aside className="saas-sidebar">
-          <div className="saas-brand">
-            <span className="saas-brand-icon">✦</span>
-            <span>
-              Bulk Message
-              <small>Business Messaging Platform</small>
-            </span>
+      <div className="workspace">
+        <aside className="workspace-sidebar">
+          <div className="workspace-brand">
+            <span className="brand-mark" aria-hidden="true"><span>↗</span></span>
+            <div className="brand-name">bulk<span>message</span><small>BUSINESS PLATFORM</small></div>
           </div>
-
-          <nav className="saas-nav" aria-label="Main navigation">
+          <div className="workspace-switcher">
+            <div className="workspace-switcher-icon">{(companies[0]?.name || 'W').slice(0,1).toUpperCase()}</div>
+            <div className="workspace-switcher-text">
+              <strong>{companies[0]?.name || 'My workspace'}</strong>
+              <small>{companies.length > 1 ? `${companies.length} companies available` : 'Business workspace'}</small>
+            </div>
+          </div>
+          <div className="nav-caption">WORKSPACE</div>
+          <nav className="workspace-nav" aria-label="Workspace navigation">
             {navigation.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={activeSection === item.id ? 'active' : ''}
+              <button key={item.id} type="button"
+                className={activeSection === item.id ? 'nav-item selected' : 'nav-item'}
                 aria-current={activeSection === item.id ? 'page' : undefined}
-                onClick={() => setActiveSection(item.id)}
-              >
-                <span aria-hidden="true" style={{ marginRight: 12 }}>
-                  {item.symbol}
-                </span>
-                {item.label}
+                onClick={() => setActiveSection(item.id)}>
+                <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+                <span>{item.label}</span>
+                {activeSection === item.id && <span className="nav-active-dot" aria-hidden="true" />}
               </button>
             ))}
           </nav>
-
-          <div className="saas-sidebar-footer">
-            Official Meta Cloud API integration
-            <p>Message sending is currently disabled.</p>
+          <div className="workspace-sidebar-bottom">
+            <div className="sidebar-support">
+              <span className="support-indicator" />
+              <strong>Platform setup</strong>
+              <p>Meta onboarding is in progress. Messaging remains disabled until setup is complete.</p>
+              <button type="button" onClick={() => setActiveSection('whatsapp')}>View setup <span aria-hidden="true">↗</span></button>
+            </div>
+            <div className="sidebar-account"><span className="sidebar-avatar">{email.slice(0,1).toUpperCase()}</span><span className="sidebar-account-email" title={email}>{email}</span></div>
           </div>
         </aside>
-
-        <main className="saas-main">
-          <header className="saas-topbar">
-            <div className="saas-topbar-title">
-              {titles[activeSection]}
-            </div>
-
-            <div className="saas-user">
-              <div className="saas-avatar" aria-hidden="true">
-                {email.charAt(0).toUpperCase() || 'U'}
-              </div>
-              <span className="saas-user-email">{email}</span>
-              <button
-                type="button"
-                className="saas-logout"
-                onClick={logout}
-              >
-                Logout
-              </button>
+        <div className="workspace-body">
+          <header className="workspace-topbar">
+            <div className="breadcrumbs"><span>Workspace</span><span className="crumb-divider">/</span><strong>{pageNames[activeSection]}</strong></div>
+            <div className="topbar-actions">
+              <span className="environment-pill"><span /> Development</span>
+              <button className="topbar-logout" type="button" onClick={logout}>Sign out <span aria-hidden="true">↗</span></button>
             </div>
           </header>
-
-          <div className="saas-content">
+          <main className="workspace-content">
             {activeSection === 'overview' && (
               <>
-                <h1 className="saas-heading">
-                  Welcome to your workspace
-                </h1>
-                <p className="saas-subheading">
-                  Manage your businesses and messaging operations
-                  from one place.
-                </p>
-
-                <div className="saas-stats">
-                  <div className="saas-card">
-                    <div className="saas-stat-label">
-                      Total Companies
-                    </div>
-                    <div className="saas-stat-value">
-                      {companiesLoading ? '...' : companiesError ? '—' : companies.length}
-                    </div>
-                    <div className="saas-stat-note">
-                      Companies linked to your account
-                    </div>
-                  </div>
-
-                  <div className="saas-card">
-                    <div className="saas-stat-label">
-                      Messaging Status
-                    </div>
-                    <div className="saas-stat-value" style={{ fontSize: 22 }}>
-                      Disabled
-                    </div>
-                    <div className="saas-stat-note">
-                      Campaign sending not yet enabled
-                    </div>
-                  </div>
-
-                  <div className="saas-card">
-                    <div className="saas-stat-label">
-                      WhatsApp Setup
-                    </div>
-                    <div className="saas-stat-value" style={{ fontSize: 22 }}>
-                      In progress
-                    </div>
-                    <div className="saas-stat-note">
-                      Complete Meta onboarding to connect
-                    </div>
-                  </div>
+                <div className="page-heading-row">
+                  <div><div className="eyebrow">WORKSPACE OVERVIEW</div><h1>Good to see you.</h1><p>Here’s what’s happening across your business messaging workspace.</p></div>
+                  <button className="primary-button" type="button" onClick={() => setActiveSection('whatsapp')}><span aria-hidden="true">＋</span> Connect WhatsApp</button>
                 </div>
-
-                <section className="saas-card">
-                  <h2 className="saas-section-title">
-                    Your Companies
-                  </h2>
-
-                  {companiesLoading && <p>Loading companies...</p>}
-
-                  {companiesError && (
-                    <p role="alert" style={{ color: '#dc2626' }}>
-                      {companiesError}
-                    </p>
-                  )}
-
-                  {!companiesLoading &&
-                    !companiesError &&
-                    companies.length === 0 && (
-                      <p className="saas-muted">
-                        No companies found.
-                      </p>
-                    )}
-
-                  {companies.map((company) => (
-                    <div className="saas-company" key={company.id}>
-                      <strong>{company.name}</strong>
-                      <div className="saas-company-role">
-                        Role: {company.role}
-                      </div>
+                <div className="overview-metrics">
+                  <article className="metric-tile"><div className="metric-top"><span>Business workspaces</span><span className="metric-symbol">▦</span></div><strong>{companiesLoading ? '…' : companiesError ? '—' : companies.length}</strong><small>{companiesError ? 'Unable to load workspaces' : 'Linked to your account'}</small></article>
+                  <article className="metric-tile"><div className="metric-top"><span>Campaign delivery</span><span className="metric-symbol">↗</span></div><strong className="metric-status">Not enabled</strong><small>Sending is disabled for now</small></article>
+                  <article className="metric-tile"><div className="metric-top"><span>Meta integration</span><span className="metric-symbol">◉</span></div><strong className="metric-status">Setup pending</strong><small>Finish WhatsApp onboarding</small></article>
+                </div>
+                <div className="overview-columns">
+                  <section className="panel">
+                    <div className="panel-header"><div><span className="panel-kicker">GET STARTED</span><h2>Complete your setup</h2></div><span className="setup-chip">Action required</span></div>
+                    <p className="panel-description">Follow these steps to prepare your workspace for official WhatsApp messaging.</p>
+                    <div className="setup-steps">
+                      <div className="setup-step"><span className="step-check">✓</span><div><strong>Workspace created</strong><p>Your business account is ready.</p></div><span className="step-done">Done</span></div>
+                      <div className="setup-step"><span className="step-number">02</span><div><strong>Connect WhatsApp Business</strong><p>Finish Meta Embedded Signup and account verification.</p></div><button type="button" onClick={() => setActiveSection('whatsapp')}>Open ↗</button></div>
+                      <div className="setup-step"><span className="step-number">03</span><div><strong>Prepare your first campaign</strong><p>Create a draft. Sending will stay disabled until activation.</p></div><button type="button" onClick={() => setActiveSection('campaigns')}>Open ↗</button></div>
                     </div>
-                  ))}
-                </section>
-
-                <section className="saas-card" style={{ marginTop: 20 }}>
-                  <h2 className="saas-section-title">
-                    Quick Actions
-                  </h2>
-                  <p className="saas-muted">
-                    Open a workspace to manage your data.
-                  </p>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                    <button
-                      className="saas-action"
-                      onClick={() => setActiveSection('contacts')}
-                    >
-                      Manage Contacts
-                    </button>
-                    <button
-                      className="saas-action"
-                      onClick={() => setActiveSection('campaigns')}
-                    >
-                      View Campaigns
-                    </button>
-                    <button
-                      className="saas-action"
-                      onClick={() => setActiveSection('whatsapp')}
-                    >
-                      WhatsApp Accounts
-                    </button>
-                  </div>
-                </section>
+                  </section>
+                  <section className="panel">
+                    <div className="panel-header"><div><span className="panel-kicker">YOUR ORGANIZATION</span><h2>Workspaces</h2></div></div>
+                    {companiesLoading && <p className="panel-description">Loading workspaces…</p>}
+                    {companiesError && <p role="alert" className="form-error">{companiesError}</p>}
+                    {!companiesLoading && !companiesError && companies.length === 0 && <p className="panel-description">No workspaces found.</p>}
+                    <div className="company-list">{companies.map((company) => <div className="company-list-row" key={company.id}><span className="company-logo">{company.name.slice(0,1).toUpperCase()}</span><div><strong>{company.name}</strong><small>{company.role}</small></div><span className="company-chevron">↗</span></div>)}</div>
+                    <div className="panel-footnote">Company data is loaded from your account.</div>
+                  </section>
+                </div>
+                <div className="bottom-note"><span className="note-dot" /> Official Meta Cloud API integration · Campaign sending is not yet enabled.</div>
               </>
             )}
-
-            <div style={{ display: activeSection === 'contacts' ? 'block' : 'none' }}>
+            <div className="manager-page" style={{display: activeSection === 'contacts' ? 'block' : 'none'}}>
+              <div className="page-heading-row"><div><div className="eyebrow">AUDIENCE</div><h1>Contacts</h1><p>Manage your opted-in audience and contact records.</p></div></div>
               <ContactsManager token={token} />
             </div>
-
-            <div style={{ display: activeSection === 'campaigns' ? 'block' : 'none' }}>
+            <div className="manager-page" style={{display: activeSection === 'campaigns' ? 'block' : 'none'}}>
+              <div className="page-heading-row"><div><div className="eyebrow">MESSAGING</div><h1>Campaigns</h1><p>Build and manage campaign drafts before sending is enabled.</p></div></div>
               <CampaignsManager token={token} />
             </div>
-
-            <div style={{ display: activeSection === 'whatsapp' ? 'block' : 'none' }}>
+            <div className="manager-page" style={{display: activeSection === 'whatsapp' ? 'block' : 'none'}}>
+              <div className="page-heading-row"><div><div className="eyebrow">INTEGRATIONS</div><h1>WhatsApp Accounts</h1><p>Manage official Meta WhatsApp Business connections.</p></div></div>
               <WhatsAppConnectionsManager token={token} />
             </div>
-          </div>
-        </main>
+          </main>
+        </div>
       </div>
     );
   }
-  // Login and registration screen
+
+
   return (
-    <main style={{ maxWidth: 920, margin: '64px auto', padding: 24 }}>
-      <h1>WhatsApp Bulk Message</h1>
-      <p>Multi-business messaging dashboard</p>
-
-      <section style={{ ...cardStyle, maxWidth: 440 }}>
-        <h2>
-          {mode === 'login' ? 'Sign in' : 'Create business account'}
-        </h2>
-
-        {mode === 'register' && (
-          <input
-            aria-label="Business name"
-            placeholder="Business name"
-            value={business}
-            onChange={(event) => setBusiness(event.target.value)}
-            style={{
-              padding: 12,
-              width: '90%',
-              marginBottom: 12,
-            }}
-          />
-        )}
-
-        <input
-          aria-label="Email"
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          style={{
-            padding: 12,
-            width: '90%',
-            marginBottom: 12,
-          }}
-        />
-
-        <input
-          aria-label="Password"
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          style={{
-            padding: 12,
-            width: '90%',
-            marginBottom: 12,
-          }}
-        />
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            flexWrap: 'wrap',
-          }}
-        >
-          <button
-            onClick={submit}
-            disabled={loading}
-            style={buttonStyle}
-          >
-            {loading ? 'Please wait...' : 'Continue'}
-          </button>
-
-          <button
-            onClick={() => {
-              setMode(mode === 'login' ? 'register' : 'login');
-              setResult('');
-            }}
-            style={{
-              padding: 12,
-              cursor: 'pointer',
-            }}
-          >
-            Switch to {mode === 'login' ? 'register' : 'login'}
-          </button>
+    <main className="auth-layout">
+      <div className="auth-story">
+        <div className="auth-story-brand"><span className="brand-mark">↗</span><strong>bulk<span>message</span></strong></div>
+        <div className="auth-story-content">
+          <span className="auth-story-tag">BUSINESS MESSAGING, SIMPLIFIED</span>
+          <h1>Connect your business.<br/><em>Start better conversations.</em></h1>
+          <p>One thoughtful workspace to organize contacts, prepare campaigns and manage your official WhatsApp Business connections.</p>
+          <div className="auth-story-feature"><span>✓</span> Built for multiple business workspaces</div>
+          <div className="auth-story-feature"><span>✓</span> Official Meta Cloud API integration</div>
+          <div className="auth-story-feature"><span>✓</span> Secure account-based access</div>
         </div>
-
-        <p role="status">{result}</p>
-      </section>
+        <div className="auth-story-footer">© {new Date().getFullYear()} Bulk Message · Business messaging platform</div>
+      </div>
+      <div className="auth-form-area">
+        <div className="auth-form-container">
+          <div className="auth-mobile-brand">bulk<span>message</span></div>
+          <span className="eyebrow">WELCOME TO YOUR WORKSPACE</span>
+          <h2>{mode === 'login' ? 'Sign in to your account' : 'Create your business account'}</h2>
+          <p className="auth-description">{mode === 'login' ? 'Enter your details to continue to your dashboard.' : 'Get started with your business messaging workspace.'}</p>
+          <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="auth-form">
+            {mode === 'register' && <label>Business name<input autoComplete="organization" value={business} onChange={e => setBusiness(e.target.value)} placeholder="Your business name" required /></label>}
+            <label>Email address<input type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" required /></label>
+            <label>Password<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required /></label>
+            {result && <p className="auth-result" role="status">{result}</p>}
+            <button type="submit" className="primary-button auth-submit" disabled={loading}>{loading ? 'Please wait…' : mode === 'login' ? 'Sign in →' : 'Create account →'}</button>
+          </form>
+          <p className="auth-switch">{mode === 'login' ? "Don't have an account?" : 'Already have an account?'} <button type="button" onClick={() => {setMode(mode === 'login' ? 'register' : 'login');setResult('');}}>{mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>
+          <div className="auth-security">Protected workspace · Official Meta integration</div>
+        </div>
+      </div>
     </main>
   );
 }
-
