@@ -27,7 +27,7 @@ app.post('/api/v1/auth/login',handler(async(req:any,res:any)=>{
  if(!parsed.success)return res.status(400).json({error:'Invalid credentials'});
  const user=await db.user.findUnique({where:{email:parsed.data.email},include:{memberships:true}});
  if(!user||!await bcrypt.compare(parsed.data.password,user.passwordHash))return res.status(401).json({error:'Invalid credentials'});
- const membership=user.memberships.find(m=>m.tenantId===parsed.data.tenantId) || (!req.body.tenantId && user.memberships.length===1 ? user.memberships[0] : undefined);if(!membership)return res.status(403).json({error:'Select an authorized company using tenantId'});
+ const membership=user.memberships.find(m=>m.tenantId===parsed.data.tenantId) || (!parsed.data.tenantId && user.memberships.length===1 ? user.memberships[0] : undefined);if(!membership)return res.status(403).json({error:'Select an authorized company using tenantId'});
  res.json({token:jwt.sign({sub:user.id,tenantId:membership.tenantId,role:membership.role},secret!,{expiresIn:'8h'})});
 }));
 app.get('/api/v1/companies',auth,handler(async(req:any,res:any)=>{const memberships=await db.membership.findMany({where:{userId:req.user.sub},include:{tenant:true}});res.json(memberships.map(m=>({id:m.tenant.id,name:m.tenant.name,role:m.role})));}));
