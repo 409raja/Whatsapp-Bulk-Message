@@ -23,13 +23,15 @@ app.post('/api/v1/auth/register',handler(async(req:any,res:any)=>{
  res.status(201).json({userId:user.id});
 }));
 app.post('/api/v1/auth/login',handler(async(req:any,res:any)=>{
- const parsed=z.object({email:z.string().email(),password:z.string()}).safeParse(req.body);
+ const parsed=z.object({email:z.string().email(),password:z.string(),tenantId:z.string().optional()}).safeParse(req.body);
  if(!parsed.success)return res.status(400).json({error:'Invalid credentials'});
  const user=await db.user.findUnique({where:{email:parsed.data.email},include:{memberships:true}});
  if(!user||!await bcrypt.compare(parsed.data.password,user.passwordHash))return res.status(401).json({error:'Invalid credentials'});
- const membership=user.memberships[0];if(!membership)return res.status(403).json({error:'No business membership'});
+ const membership=user.memberships.find(m=>m.tenantId===parsed.data.tenantId) || (!req.body.tenantId && user.memberships.length===1 ? user.memberships[0] : undefined);if(!membership)return res.status(403).json({error:'Select an authorized company using tenantId'});
  res.json({token:jwt.sign({sub:user.id,tenantId:membership.tenantId,role:membership.role},secret!,{expiresIn:'8h'})});
 }));
+app.get('/api/v1/companies',auth,handler(async(req:any,res:any)=>{const memberships=await db.membership.findMany({where:{userId:req.user.sub},include:{tenant:true}});res.json(memberships.map(m=>({id:m.tenant.id,name:m.tenant.name,role:m.role})));}));
+app.get('/api/v1/whatsapp/connections',auth,handler(async(req:any,res:any)=>res.json(await db.whatsAppConnection.findMany({where:{tenantId:req.user.tenantId},select:{id:true,label:true,wabaId:true,phoneNumberId:true,displayPhoneNumber:true,status:true,createdAt:true}}))));
 app.get('/api/v1/contacts',auth,handler(async(req:any,res:any)=>res.json(await db.contact.findMany({where:{tenantId:req.user.tenantId},orderBy:{createdAt:'desc'},take:100}))));
 app.post('/api/v1/contacts',auth,handler(async(req:any,res:any)=>{
  const parsed=z.object({name:z.string().max(120).optional(),phone:z.string().regex(/^\+[1-9]\d{7,14}$/),consent:z.literal(true)}).safeParse(req.body);
