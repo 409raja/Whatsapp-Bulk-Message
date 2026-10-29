@@ -40,7 +40,7 @@ app.post('/api/v1/contacts',auth,handler(async(req:any,res:any)=>{
  res.status(201).json(contact);
 }));
 app.post('/api/v1/contacts/import',auth,handler(async(req:any,res:any)=>{
- const parsed=z.object({contacts:z.array(z.object({phone:z.string().regex(/^\\+[1-9]\\d{7,14}$/),name:z.string().max(120).optional(),consent:z.literal(true)})).min(1).max(500)}).safeParse(req.body);
+ const parsed=z.object({contacts:z.array(z.object({phone:z.string().regex(/^\+[1-9]\d{7,14}$/),name:z.string().max(120).optional(),consent:z.literal(true)})).min(1).max(500)}).safeParse(req.body);
  if(!parsed.success)return res.status(400).json({error:'Provide up to 500 opted-in contacts with valid E.164 numbers'});
  const unique=[...new Map(parsed.data.contacts.map(c=>[c.phone,c])).values()];
  let imported=0;
