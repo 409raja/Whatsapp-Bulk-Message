@@ -1,1 +1,1 @@
-{"name":"whatsapp-bulk-message","private":true,"workspaces":["apps/*"],"scripts":{"dev:api":"npm run dev -w apps/api","dev:web":"npm run dev -w apps/web"}}
+{"name":"whatsapp-bulk-message","private":true,"workspaces":["apps/*"],"scripts":{"dev:api":"npm run dev -w apps/api","dev:web":"npm run dev -w apps/web"},"devDependencies":{"prisma":"^6.19.3"}}
