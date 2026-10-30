@@ -2,13 +2,17 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string };
+type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[] };
+type Contact = { id: string; name: string | null; phone: string };
 type Audience = { eligible: number; optedOut: number; total: number };
 const input: CSSProperties = { padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, width: '100%', boxSizing: 'border-box' };
 const btn: CSSProperties = { padding: '10px 15px', border: '1px solid #cbd5e1', borderRadius: 8, cursor: 'pointer', background: '#fff' };
 
 export default function CampaignsManager({ token }: { token: string }) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [contactSearch, setContactSearch] = useState('');
   const [audience, setAudience] = useState<Audience | null>(null);
   const [name, setName] = useState('');
   const [templateName, setTemplateName] = useState('');
@@ -32,22 +36,24 @@ export default function CampaignsManager({ token }: { token: string }) {
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      const [items, counts] = await Promise.all([
+      const [items, counts, eligibleContacts] = await Promise.all([
         request('/api/v1/campaigns', { signal }),
         request('/api/v1/campaigns/audience-preview', { signal }),
+        request('/api/v1/campaigns/eligible-contacts', { signal }),
       ]);
-      if (!signal?.aborted) { setCampaigns(items); setAudience(counts); }
+      if (!signal?.aborted) { setCampaigns(items); setAudience(counts); setContacts(eligibleContacts); }
     } catch (e) { if (!signal?.aborted) setError(e instanceof Error ? e.message : 'Failed to load campaigns'); }
     finally { if (!signal?.aborted) setLoading(false); }
   }, [request]);
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
-  function reset() { setEditing(null); setName(''); setTemplateName(''); }
+  function reset() { setEditing(null); setName(''); setTemplateName(''); setSelected([]); }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setError(''); setMessage('');
-    const payload = { name: name.trim(), templateName: templateName.trim() };
+    const payload = { name: name.trim(), templateName: templateName.trim(), recipientIds: selected };
     if (payload.name.length < 2 || !/^[a-z0-9_]+$/.test(payload.templateName)) {
       setError('Enter a campaign name and a lowercase template identifier (letters, digits, underscores)'); return;
     }
+    if (!selected.length) { setError('Select at least one opted-in customer'); return; }
     setSaving(true);
     try {
       await request(editing ? '/api/v1/campaigns/' + encodeURIComponent(editing) : '/api/v1/campaigns', {
@@ -90,6 +96,30 @@ export default function CampaignsManager({ token }: { token: string }) {
       <h3 style={{ margin: '0 0 3px' }}>{editing ? 'Edit Campaign Draft' : 'New Campaign Draft'}</h3>
       <label>Campaign Name<input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="Customer Updates" minLength={2} maxLength={120} required /></label>
       <label>WhatsApp Template Identifier<input style={input} value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="customer_update" maxLength={120} required /></label>
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
+        <strong>Select Customers ({selected.length} selected)</strong>
+        <p style={{ fontSize: 13, color: '#64748b' }}>Only opted-in contacts can be selected. Up to 500 shown.</p>
+        <input style={input} placeholder="Search customers" value={contactSearch} onChange={e => setContactSearch(e.target.value)} />
+        <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
+          <button type="button" style={btn} onClick={() => setSelected(contacts.map(c => c.id))}>Select All</button>
+          <button type="button" style={btn} onClick={() => setSelected([])}>Clear</button>
+        </div>
+        <div style={{ maxHeight: 210, overflowY: 'auto' }}>
+          {contacts.filter(c => (c.name || '').toLowerCase().includes(contactSearch.toLowerCase()) || c.phone.includes(contactSearch)).map(c =>
+            <label key={c.id} style={{ display: 'block', padding: 7 }}>
+              <input type="checkbox" checked={selected.includes(c.id)} onChange={e => setSelected(old => e.target.checked ? [...old, c.id] : old.filter(id => id !== c.id))} />
+              {' '}{c.name || 'Unnamed'} — {c.phone}
+            </label>
+          )}
+          {!contacts.length && <p>No opted-in customers available. Add contacts first.</p>}
+        </div>
+      </div>
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
+        <strong>Campaign Preview</strong>
+        <p>Template identifier: <code>{templateName || 'Not selected'}</code></p>
+        <p>Selected customers: {selected.length}</p>
+        <p style={{ fontSize: 13, color: '#64748b' }}>Actual WhatsApp message content cannot be previewed until approved template details are integrated.</p>
+      </div>
       <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>Template name is saved as a draft reference. Meta approval is not yet verified here.</p>
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="submit" disabled={saving} style={{ ...btn, background: '#1769aa', color: 'white' }}>{saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Campaign'}</button>
@@ -110,7 +140,7 @@ export default function CampaignsManager({ token }: { token: string }) {
           <td style={{ padding: 12 }}>{c.name}</td><td style={{ padding: 12 }}>{c.templateName}</td>
           <td style={{ padding: 12 }}>{c.status}</td><td style={{ padding: 12 }}>{new Date(c.createdAt).toLocaleString()}</td>
           <td style={{ padding: 12 }}>{c.status === 'DRAFT' && <div style={{ display: 'flex', gap: 8 }}>
-            <button style={btn} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); }}>Edit</button>
+            <button style={btn} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); }}>Edit</button>
             <button style={btn} disabled={saving} onClick={() => void remove(c)}>Delete</button>
           </div>}</td>
         </tr>)}</tbody>
