@@ -531,7 +531,7 @@ router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: R
   if (!parsed.success) return res.status(400).json({ error: 'Valid recipient, approved template, language and consent confirmation required' });
   const connection = await db.whatsAppConnection.findFirst({
     where: { id: req.params.connectionId, tenantId: user.tenantId },
-    select: { phoneNumberId: true, accessTokenEncrypted: true },
+    select: { id: true, phoneNumberId: true, accessTokenEncrypted: true },
   });
   if (!connection) return res.status(404).json({ error: 'Connection not found' });
   if (!connection.accessTokenEncrypted) return res.status(409).json({ error: 'Stored credential missing' });
@@ -563,12 +563,46 @@ router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: R
     metaSubcode: typeof data?.error?.error_subcode === 'number' ? data.error.error_subcode : undefined,
   });
   const messageId = data?.messages?.[0]?.id;
+  if (typeof messageId === 'string' && messageId.startsWith('wamid.')) {
+    try {
+      await db.whatsAppTestMessage.upsert({
+        where: { messageId },
+        create: {
+          tenantId: user.tenantId, connectionId: connection.id,
+          messageId, recipient: parsed.data.to,
+          templateName: parsed.data.templateName,
+          languageCode: parsed.data.languageCode,
+        },
+        update: {},
+      });
+    } catch (error) {
+      console.error('Meta accepted test send but persistence failed', { messageId });
+      return res.status(503).json({
+        accepted: true, messageId, deliveryVerified: false,
+        error: 'Meta accepted the message but local tracking failed; do not retry automatically',
+      });
+    }
+  }
   return res.status(202).json({
     accepted: typeof messageId === 'string',
     messageId: typeof messageId === 'string' ? messageId : null,
     deliveryVerified: false,
     note: 'Meta accepted the request; delivery must be verified separately.',
   });
+}));
+
+
+// Tenant-scoped delivery lookup for a previously sent diagnostic message.
+router.get('/:connectionId/test-messages/:messageId', asyncHandler(async (req: Request, res: Response) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!(await isWhatsAppAdmin(user))) return res.status(403).json({ error: 'OWNER or ADMIN access required' });
+  const message = await db.whatsAppTestMessage.findFirst({
+    where: { tenantId: user.tenantId, connectionId: req.params.connectionId, messageId: req.params.messageId },
+    select: { messageId: true, status: true, errorCode: true, errorTitle: true, errorMessage: true, createdAt: true, updatedAt: true },
+  });
+  if (!message) return res.status(404).json({ error: 'Tracked test message not found' });
+  return res.json({ ...message, deliveryVerified: ['delivered','read'].includes(message.status) });
 }));
 
 export default router;
