@@ -398,7 +398,16 @@ router.post('/existing', asyncHandler(async (req: Request, res: Response) => {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!(await isWhatsAppAdmin(user))) return res.status(403).json({ error: 'OWNER or ADMIN access required' });
   const parsed = existingAccountSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Provide valid WABA ID, Phone Number ID and access token' });
+  if (!parsed.success) {
+    // Return only field names and issue codes; never echo access tokens or request values.
+    const fields = [...new Set(parsed.error.issues.map(issue =>
+      issue.path.length ? String(issue.path[0]) : 'request'
+    ))];
+    return res.status(400).json({
+      error: `Invalid connection fields: ${fields.join(', ')}`,
+      invalidFields: fields,
+    });
+  }
   const { wabaId, phoneNumberId, accessToken } = parsed.data;
   const version = process.env.META_GRAPH_VERSION || 'v23.0';
   if (!/^v\\d+\\.\\d+$/.test(version)) return res.status(500).json({ error: 'Meta Graph version is not configured' });
