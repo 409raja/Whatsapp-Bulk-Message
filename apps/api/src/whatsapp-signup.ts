@@ -512,4 +512,63 @@ router.get('/:connectionId/health', asyncHandler(async (req: Request, res: Respo
   });
 }));
 
+
+/**
+ * One-recipient diagnostic send. No campaign activation or webhook changes.
+ * Requires an explicitly opted-in recipient and an approved, parameter-free template.
+ */
+router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: Response) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!(await isWhatsAppAdmin(user))) return res.status(403).json({ error: 'OWNER or ADMIN access required' });
+  if (process.env.WHATSAPP_TEST_SEND_ENABLED !== 'true') return res.status(403).json({ error: 'Test sending is disabled' });
+  const parsed = z.object({
+    to: z.string().regex(/^\\+[1-9]\\d{7,14}$/),
+    templateName: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
+    languageCode: z.string().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/),
+    consentConfirmed: z.literal(true),
+  }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Valid recipient, approved template, language and consent confirmation required' });
+  const connection = await db.whatsAppConnection.findFirst({
+    where: { id: req.params.connectionId, tenantId: user.tenantId },
+    select: { phoneNumberId: true, accessTokenEncrypted: true },
+  });
+  if (!connection) return res.status(404).json({ error: 'Connection not found' });
+  if (!connection.accessTokenEncrypted) return res.status(409).json({ error: 'Stored credential missing' });
+  const version = process.env.META_GRAPH_VERSION || 'v23.0';
+  if (!/^v[0-9]+\\.[0-9]+$/.test(version)) return res.status(500).json({ error: 'Invalid Meta version' });
+  let token: string;
+  try { token = decryptToken(connection.accessTokenEncrypted); }
+  catch { return res.status(500).json({ error: 'Stored credential could not be decrypted' }); }
+  let response: globalThis.Response;
+  try {
+    response = await fetch(`https://graph.facebook.com/${version}/${connection.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: parsed.data.to.slice(1),
+        type: 'template',
+        template: { name: parsed.data.templateName, language: { code: parsed.data.languageCode } },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    return res.status(502).json({ error: 'Could not reach Meta API; delivery not confirmed' });
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok) return res.status(502).json({
+    error: 'Meta rejected the test message',
+    metaCode: typeof data?.error?.code === 'number' ? data.error.code : undefined,
+    metaSubcode: typeof data?.error?.error_subcode === 'number' ? data.error.error_subcode : undefined,
+  });
+  const messageId = data?.messages?.[0]?.id;
+  return res.status(202).json({
+    accepted: typeof messageId === 'string',
+    messageId: typeof messageId === 'string' ? messageId : null,
+    deliveryVerified: false,
+    note: 'Meta accepted the request; delivery must be verified separately.',
+  });
+}));
+
 export default router;
