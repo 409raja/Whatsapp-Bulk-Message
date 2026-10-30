@@ -453,67 +453,62 @@ app.post(
   })
 );
 
-// List campaigns
-app.get(
-  '/api/v1/campaigns',
-  auth,
-  handler(async (req: any, res: any) => {
-    const campaigns = await db.campaign.findMany({
-      where: {
-        tenantId: req.user.tenantId,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: 100,
-    });
+// Campaign drafts are tenant-scoped. No messages are sent by these endpoints.
+app.get('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
+  const campaigns = await db.campaign.findMany({
+    where: { tenantId: req.user.tenantId },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+  return res.json(campaigns);
+}));
 
-    return res.json(campaigns);
-  })
-);
+app.get('/api/v1/campaigns/audience-preview', auth, handler(async (req: any, res: any) => {
+  const [eligible, optedOut] = await db.$transaction([
+    db.contact.count({ where: { tenantId: req.user.tenantId, consent: true } }),
+    db.contact.count({ where: { tenantId: req.user.tenantId, consent: false } }),
+  ]);
+  return res.json({ eligible, optedOut, total: eligible + optedOut, note: 'Estimate only; no contacts selected or messages queued' });
+}));
 
-// Create draft campaign
-app.post(
-  '/api/v1/campaigns',
-  auth,
-  handler(async (req: any, res: any) => {
-    const parsed = z
-      .object({
-        name: z.string().min(2),
-        templateName: z.string().min(1),
-      })
-      .safeParse(req.body);
+const campaignDraftSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  templateName: z.string().trim().min(1).max(120).regex(/^[a-z0-9_]+$/, 'Use lowercase letters, numbers and underscores'),
+}).strict();
 
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'Invalid campaign',
-      });
-    }
+app.post('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
+  const parsed = campaignDraftSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid campaign name or template identifier' });
+  const campaign = await db.campaign.create({ data: {
+    tenantId: req.user.tenantId, ...parsed.data, status: 'DRAFT',
+  } });
+  return res.status(201).json(campaign);
+}));
 
-    const campaign = await db.campaign.create({
-      data: {
-        tenantId: req.user.tenantId,
-        ...parsed.data,
-        status: 'DRAFT',
-      },
-    });
+app.patch('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => {
+  const parsed = campaignDraftSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid campaign name or template identifier' });
+  const updated = await db.campaign.updateMany({
+    where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' },
+    data: parsed.data,
+  });
+  if (!updated.count) return res.status(404).json({ error: 'Editable draft not found' });
+  return res.json(await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } }));
+}));
 
-    return res.status(201).json(campaign);
-  })
-);
+app.delete('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => {
+  const deleted = await db.campaign.deleteMany({
+    where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' },
+  });
+  if (!deleted.count) return res.status(404).json({ error: 'Deletable draft not found' });
+  return res.json({ deleted: true });
+}));
 
-// Campaign sending remains disabled until provider setup,
-// approved templates, consent enforcement, and queue are ready.
-app.post(
-  '/api/v1/campaigns/:id/start',
-  auth,
-  (_req, res) => {
-    return res.status(501).json({
-      error:
-        'Sending disabled until official provider, template validation, opt-out and durable queue are configured',
-    });
-  }
-);
+// Do not enable sending without approved templates, audience selection,
+// consent checks, a durable per-number queue, rate limits and webhook reporting.
+app.post('/api/v1/campaigns/:id/start', auth, (_req, res) => {
+  return res.status(501).json({ error: 'Campaign sending is not configured yet' });
+});
 
 // Centralized error handler
 app.use(
