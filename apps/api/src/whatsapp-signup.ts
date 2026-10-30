@@ -384,4 +384,65 @@ router.post(
   })
 );
 
+
+const existingAccountSchema = z.object({
+  wabaId: z.string().regex(/^\\d{8,25}$/),
+  phoneNumberId: z.string().regex(/^\\d{8,25}$/),
+  accessToken: z.string().min(30).max(4096),
+}).strict();
+
+// Manually link an already registered Meta Cloud API phone; no registration,
+// migration, webhook mutation or outgoing message is performed here.
+router.post('/existing', asyncHandler(async (req: Request, res: Response) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!(await isWhatsAppAdmin(user))) return res.status(403).json({ error: 'OWNER or ADMIN access required' });
+  const parsed = existingAccountSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide valid WABA ID, Phone Number ID and access token' });
+  const { wabaId, phoneNumberId, accessToken } = parsed.data;
+  const version = process.env.META_GRAPH_VERSION || 'v23.0';
+  if (!/^v\\d+\\.\\d+$/.test(version)) return res.status(500).json({ error: 'Meta Graph version is not configured' });
+
+  let waba: any;
+  let verifiedPhone: any;
+  try {
+    waba = await metaGet(wabaId, accessToken, version, { fields: 'id,name' });
+    if (String(waba.id) !== wabaId) throw new Error('WABA mismatch');
+    let nextUrl: string | undefined = `https://graph.facebook.com/${version}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name&limit=100`;
+    for (let page = 0; page < 20 && nextUrl; page++) {
+      const url: URL = new URL(nextUrl);
+      if (url.protocol !== 'https:' || url.hostname !== 'graph.facebook.com' || !url.pathname.startsWith(`/${version}/${wabaId}/phone_numbers`)) throw new Error('Invalid Meta pagination');
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15000) });
+      const data: any = await response.json();
+      if (!response.ok || !Array.isArray(data.data)) throw new Error('Phone verification failed');
+      verifiedPhone = data.data.find((p: any) => String(p.id) === phoneNumberId);
+      if (verifiedPhone) break;
+      nextUrl = typeof data.paging?.next === 'string' ? data.paging.next : undefined;
+    }
+    if (!verifiedPhone) return res.status(400).json({ error: 'Phone number does not belong to this accessible WABA' });
+  } catch {
+    return res.status(400).json({ error: 'Meta could not verify this token, WABA and phone number. Check permissions and IDs.' });
+  }
+
+  const existing = await db.whatsAppConnection.findUnique({ where: { phoneNumberId }, select: { id: true, tenantId: true } });
+  if (existing) return res.status(409).json({ error: existing.tenantId === user.tenantId ? 'This number is already connected to your company' : 'This number is already assigned to another company' });
+  try {
+    const connection = await db.whatsAppConnection.create({
+      data: {
+        tenantId: user.tenantId,
+        label: typeof waba.name === 'string' ? waba.name : 'WhatsApp Business',
+        wabaId, phoneNumberId,
+        displayPhoneNumber: typeof verifiedPhone.display_phone_number === 'string' ? verifiedPhone.display_phone_number : null,
+        accessTokenEncrypted: encryptToken(accessToken),
+        status: 'PENDING',
+      },
+      select: { id: true, label: true, wabaId: true, phoneNumberId: true, displayPhoneNumber: true, status: true },
+    });
+    return res.status(201).json({ connection, message: 'Existing account verified and saved; activation checks pending' });
+  } catch (error: any) {
+    if (error?.code === 'P2002') return res.status(409).json({ error: 'This phone number is already connected' });
+    throw error;
+  }
+}));
+
 export default router;
