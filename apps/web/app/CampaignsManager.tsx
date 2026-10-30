@@ -6,7 +6,6 @@ type Campaign = { id: string; name: string; templateName: string; status: string
 type Contact = { id: string; name: string | null; phone: string };
 type Audience = { eligible: number; optedOut: number; total: number };
 const input: CSSProperties = { padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, width: '100%', boxSizing: 'border-box' };
-const btn: CSSProperties = { padding: '10px 15px', border: '1px solid #cbd5e1', borderRadius: 8, cursor: 'pointer', background: '#fff' };
 
 export default function CampaignsManager({ token }: { token: string }) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -17,6 +16,7 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [name, setName] = useState('');
   const [templateName, setTemplateName] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('ALL');
   const [loading, setLoading] = useState(false);
@@ -46,7 +46,7 @@ export default function CampaignsManager({ token }: { token: string }) {
     finally { if (!signal?.aborted) setLoading(false); }
   }, [request]);
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
-  function reset() { setEditing(null); setName(''); setTemplateName(''); setSelected([]); }
+  function reset() { setEditing(null); setName(''); setTemplateName(''); setSelected([]); setComposerOpen(false); }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setError(''); setMessage('');
     const payload = { name: name.trim(), templateName: templateName.trim(), recipientIds: selected };
@@ -78,75 +78,173 @@ export default function CampaignsManager({ token }: { token: string }) {
     (filter === 'ALL' || c.status === filter) &&
     (c.name.toLowerCase().includes(search.toLowerCase()) || c.templateName.toLowerCase().includes(search.toLowerCase()))
   );
-  return <section style={{ padding: 24, border: '1px solid #e2e8f0', borderRadius: 14, background: 'white', marginTop: 24 }}>
-    <h2>Campaign Management</h2>
-    <p style={{ color: '#64748b' }}>Create and manage campaign drafts. Sending is disabled until Meta integration and compliance checks are ready.</p>
-    {error && <p role="alert" style={{ color: '#b91c1c' }}>{error}</p>}
-    {message && <p role="status" style={{ color: '#047857' }}>{message}</p>}
-    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '18px 0' }}>
-      {[
-        ['Saved Campaigns', campaigns.length],
-        ['Eligible Opted-in Contacts', audience?.eligible ?? '—'],
-        ['Opted-out Contacts', audience?.optedOut ?? '—'],
-      ].map(([label, value]) => <div key={label} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 18, minWidth: 175, flex: 1 }}>
-        <div style={{ color: '#64748b', fontSize: 13 }}>{label}</div><strong style={{ fontSize: 25 }}>{value}</strong>
-      </div>)}
+  return <section className="campaigns-page">
+    <header className="manager-page-heading">
+      <div>
+        <span className="manager-eyebrow">MESSAGING</span>
+        <h1>Campaigns</h1>
+        <p>Prepare WhatsApp campaign drafts for your opted-in audience.</p>
+      </div>
+      <div className="campaign-heading-actions">
+        <span className="campaigns-paused-badge"><span /> Sending disabled</span>
+        <button type="button" className="manager-primary-button" onClick={() => { reset(); setComposerOpen(true); }}>
+          <span aria-hidden="true">+</span> New campaign draft
+        </button>
+      </div>
+    </header>
+
+    {error && <p className="manager-feedback manager-feedback-error" role="alert">{error}</p>}
+    {message && <p className="manager-feedback manager-feedback-success" role="status">{message}</p>}
+
+    <div className="campaign-stats">
+      <div className="manager-metric-card">
+        <span className="manager-metric-icon metric-icon-violet" aria-hidden="true">▤</span>
+        <span className="manager-metric-copy"><small>Saved drafts</small><strong>{loading && !campaigns.length ? '…' : campaigns.length}</strong></span>
+      </div>
+      <div className="manager-metric-card">
+        <span className="manager-metric-icon metric-icon-green" aria-hidden="true">✓</span>
+        <span className="manager-metric-copy"><small>Eligible opted-in contacts</small><strong>{audience?.eligible ?? '—'}</strong></span>
+      </div>
+      <div className="manager-metric-card">
+        <span className="manager-metric-icon metric-icon-amber" aria-hidden="true">−</span>
+        <span className="manager-metric-copy"><small>Opted-out contacts</small><strong>{audience?.optedOut ?? '—'}</strong></span>
+      </div>
     </div>
-    <form onSubmit={save} style={{ display: 'grid', gap: 12, maxWidth: 520, marginBottom: 26 }}>
-      <h3 style={{ margin: '0 0 3px' }}>{editing ? 'Edit Campaign Draft' : 'New Campaign Draft'}</h3>
-      <label>Campaign Name<input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="Customer Updates" minLength={2} maxLength={120} required /></label>
-      <label>WhatsApp Template Identifier<input style={input} value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="customer_update" maxLength={120} required /></label>
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
-        <strong>Select Customers ({selected.length} selected)</strong>
-        <p style={{ fontSize: 13, color: '#64748b' }}>Only opted-in contacts can be selected. Up to 500 shown.</p>
-        <input style={input} placeholder="Search customers" value={contactSearch} onChange={e => setContactSearch(e.target.value)} />
-        <div style={{ display: 'flex', gap: 8, margin: '10px 0' }}>
-          <button type="button" style={btn} onClick={() => setSelected(contacts.map(c => c.id))}>Select All</button>
-          <button type="button" style={btn} onClick={() => setSelected([])}>Clear</button>
+
+    {composerOpen && (
+      <div
+        className="campaign-modal-backdrop"
+        onClick={event => {
+          if (event.target === event.currentTarget) reset();
+        }}
+      >
+      <form className="campaign-composer" role="dialog" aria-modal="true" aria-labelledby="campaign-composer-title" onSubmit={save}>
+        <div className="manager-card-heading">
+          <div>
+            <span className="manager-eyebrow">{editing ? 'UPDATE DRAFT' : 'NEW DRAFT'}</span>
+            <h2 id="campaign-composer-title">{editing ? 'Edit campaign' : 'Build a campaign'}</h2>
+            <p>Set up the details and choose your audience.</p>
+          </div>
+          <button type="button" className="manager-icon-button" aria-label="Close campaign form" onClick={reset}>×</button>
         </div>
-        <div style={{ maxHeight: 210, overflowY: 'auto' }}>
-          {contacts.filter(c => (c.name || '').toLowerCase().includes(contactSearch.toLowerCase()) || c.phone.includes(contactSearch)).map(c =>
-            <label key={c.id} style={{ display: 'block', padding: 7 }}>
-              <input type="checkbox" checked={selected.includes(c.id)} onChange={e => setSelected(old => e.target.checked ? [...old, c.id] : old.filter(id => id !== c.id))} />
-              {' '}{c.name || 'Unnamed'} — {c.phone}
-            </label>
+
+        <div className="campaign-form-fields">
+          <label className="manager-field">
+            Campaign name
+            <input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Customer updates" minLength={2} maxLength={120} required />
+          </label>
+          <label className="manager-field">
+            WhatsApp template
+            <input style={input} value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. customer_update" maxLength={120} required />
+            <span className="manager-field-hint">Use the template identifier approved in Meta.</span>
+          </label>
+        </div>
+
+        <div className="campaign-audience">
+          <div className="campaign-audience-heading">
+            <div>
+              <h3>Choose recipients</h3>
+              <p>Only opted-in contacts are available.</p>
+            </div>
+            <span className="campaign-selected-count">{selected.length} selected</span>
+          </div>
+          <label className="campaign-contact-search">
+            <span aria-hidden="true">⌕</span>
+            <input aria-label="Search eligible contacts" placeholder="Search by name or number" value={contactSearch} onChange={e => setContactSearch(e.target.value)} />
+          </label>
+          <div className="campaign-selection-actions">
+            <button type="button" className="manager-text-button" onClick={() => setSelected(contacts.map(c => c.id))}>Select all</button>
+            <button type="button" className="manager-text-button" onClick={() => setSelected([])}>Clear selection</button>
+          </div>
+          <div className="campaign-contact-list">
+            {contacts.filter(c => (c.name || '').toLowerCase().includes(contactSearch.toLowerCase()) || c.phone.includes(contactSearch)).map(c =>
+              <label className="campaign-contact-option" key={c.id}>
+                <input type="checkbox" checked={selected.includes(c.id)} onChange={e => setSelected(old => e.target.checked ? [...old, c.id] : old.filter(id => id !== c.id))} />
+                <span className="campaign-contact-avatar">{(c.name || c.phone).charAt(0).toUpperCase()}</span>
+                <span className="campaign-contact-details"><strong>{c.name || 'Unnamed contact'}</strong><small>{c.phone}</small></span>
+                <span className="campaign-consent-label"><span /> Opted in</span>
+              </label>
+            )}
+            {!contacts.length && <div className="campaign-contact-empty">No opted-in contacts available. Add contacts before creating a draft.</div>}
+            {!!contacts.length && !contacts.some(c => (c.name || '').toLowerCase().includes(contactSearch.toLowerCase()) || c.phone.includes(contactSearch)) && (
+              <div className="campaign-contact-empty">No contacts match your search.</div>
+            )}
+          </div>
+          <p className="campaign-contact-footnote">Up to 500 eligible contacts are available for selection.</p>
+        </div>
+
+        <div className="campaign-preview">
+          <div className="campaign-preview-icon" aria-hidden="true">▤</div>
+          <div className="campaign-preview-copy">
+            <strong>Draft preview</strong>
+            <span>{name.trim() || 'Campaign name'} <code>{templateName || 'template_id'}</code></span>
+          </div>
+          <span className="campaign-preview-recipients">{selected.length} recipients</span>
+        </div>
+        <p className="campaign-template-note">Message content will be available when approved template details are connected. Saving a draft does not send messages.</p>
+        <div className="campaign-form-actions">
+          <button type="submit" disabled={saving} className="manager-primary-button">
+            {saving ? 'Saving…' : editing ? 'Save changes' : 'Save as draft'}
+          </button>
+          <button type="button" className="manager-secondary-button" onClick={reset}>Cancel</button>
+        </div>
+      </form>
+      </div>
+    )}
+
+    <section className="campaign-list-card">
+        <div className="manager-card-heading">
+          <div>
+            <h2>Saved campaigns</h2>
+            <p>Your drafts stay here until you’re ready.</p>
+          </div>
+          <span className="campaign-list-count">{campaigns.length}</span>
+        </div>
+
+        <div className="campaign-toolbar">
+          <label className="contact-search">
+            <span aria-hidden="true">⌕</span>
+            <input aria-label="Search campaigns" placeholder="Search campaigns" value={search} onChange={e => setSearch(e.target.value)} />
+          </label>
+          <select aria-label="Campaign status" className="contact-filter" value={filter} onChange={e => setFilter(e.target.value)}>
+            <option value="ALL">All statuses</option>
+            <option value="DRAFT">Drafts</option>
+          </select>
+          <button type="button" className="manager-secondary-button campaign-refresh" disabled={loading} onClick={() => void load()}>{loading ? 'Loading…' : 'Refresh'}</button>
+        </div>
+
+        <div className="campaign-table-wrap">
+          <table className="manager-table campaign-table">
+            <thead><tr>{['Campaign name', 'WhatsApp template', 'Audience', 'Status', 'Created', 'Actions'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+            <tbody>{filtered.map(c => (
+              <tr key={c.id}>
+                <td><strong className="campaign-table-name">{c.name}</strong></td>
+                <td><code className="campaign-table-template">{c.templateName}</code></td>
+                <td>{Array.isArray(c.recipientIds) ? c.recipientIds.length : '—'}</td>
+                <td><span className="campaign-status-badge">{c.status}</span></td>
+                <td className="contact-date-cell">{new Date(c.createdAt).toLocaleDateString()}</td>
+                <td>
+                  {c.status === 'DRAFT' && (
+                    <div className="campaign-list-actions">
+                      <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
+                      <button aria-label={`Delete ${c.name}`} disabled={saving} onClick={() => void remove(c)}>Delete</button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {!loading && !filtered.length && (
+            <div className="manager-empty-state">
+              <span className="manager-empty-icon" aria-hidden="true">▤</span>
+              <strong>{campaigns.length ? 'No matching campaigns' : 'No campaign drafts yet'}</strong>
+              <p>{campaigns.length ? 'Try another search or status filter.' : 'Create a draft using the form to get started.'}</p>
+            </div>
           )}
-          {!contacts.length && <p>No opted-in customers available. Add contacts first.</p>}
+          {loading && !campaigns.length && <p className="manager-empty-state">Loading campaigns…</p>}
         </div>
-      </div>
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
-        <strong>Campaign Preview</strong>
-        <p>Template identifier: <code>{templateName || 'Not selected'}</code></p>
-        <p>Selected customers: {selected.length}</p>
-        <p style={{ fontSize: 13, color: '#64748b' }}>Actual WhatsApp message content cannot be previewed until approved template details are integrated.</p>
-      </div>
-      <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>Template name is saved as a draft reference. Meta approval is not yet verified here.</p>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button type="submit" disabled={saving} style={{ ...btn, background: '#1769aa', color: 'white' }}>{saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Campaign'}</button>
-        {editing && <button type="button" style={btn} onClick={reset}>Cancel</button>}
-      </div>
-    </form>
-    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-      <input aria-label="Search campaigns" style={{ ...input, maxWidth: 320 }} placeholder="Search campaign or template" value={search} onChange={e => setSearch(e.target.value)} />
-      <select aria-label="Campaign status" style={{ ...input, width: 160 }} value={filter} onChange={e => setFilter(e.target.value)}>
-        <option value="ALL">All statuses</option><option value="DRAFT">Drafts</option>
-      </select>
-      <button type="button" disabled={loading} onClick={() => void load()} style={btn}>{loading ? 'Loading...' : 'Refresh'}</button>
-    </div>
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%', textAlign: 'left' }}>
-        <thead><tr>{['Campaign', 'Template', 'Status', 'Created', 'Actions'].map(h => <th key={h} style={{ padding: 12, borderBottom: '1px solid #e2e8f0' }}>{h}</th>)}</tr></thead>
-        <tbody>{filtered.map(c => <tr key={c.id}>
-          <td style={{ padding: 12 }}>{c.name}</td><td style={{ padding: 12 }}>{c.templateName}</td>
-          <td style={{ padding: 12 }}>{c.status}</td><td style={{ padding: 12 }}>{new Date(c.createdAt).toLocaleString()}</td>
-          <td style={{ padding: 12 }}>{c.status === 'DRAFT' && <div style={{ display: 'flex', gap: 8 }}>
-            <button style={btn} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); }}>Edit</button>
-            <button style={btn} disabled={saving} onClick={() => void remove(c)}>Delete</button>
-          </div>}</td>
-        </tr>)}</tbody>
-      </table>
-      {!loading && !filtered.length && <p>No matching campaigns.</p>}
-    </div>
-    <p style={{ color: '#64748b', fontSize: 13, marginTop: 20 }}>Audience counts are estimates, not a selected recipient list. No campaign messages are queued or sent.</p>
+        <p className="campaign-list-footnote">Audience counts are estimates. No campaign messages are queued or sent.</p>
+    </section>
+    <p className="manager-compliance-note"><span aria-hidden="true">i</span> Campaign sending is disabled until Meta integration and compliance checks are ready.</p>
   </section>;
 }

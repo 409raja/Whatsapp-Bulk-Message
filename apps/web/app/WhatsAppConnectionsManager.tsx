@@ -447,6 +447,7 @@ export default function WhatsAppConnectionsManager({
 
   return (
     <section
+      className="saas-manager"
       style={{
         background: 'white',
         padding: 24,
