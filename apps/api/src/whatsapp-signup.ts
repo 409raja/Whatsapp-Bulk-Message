@@ -3,7 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes, createHash } from 'node:crypto';
 import { z } from 'zod';
-import { encryptToken } from './encryption';
+import { encryptToken, decryptToken } from './encryption';
 
 const router = Router();
 const db = new PrismaClient();
@@ -464,6 +464,52 @@ router.post('/existing', asyncHandler(async (req: Request, res: Response) => {
     if (error?.code === 'P2002') return res.status(409).json({ error: 'This phone number is already connected' });
     throw error;
   }
+}));
+
+
+/**
+ * Read-only connection health check. Does not change the webhook, phone
+ * registration, credentials, or activation state.
+ */
+router.get('/:connectionId/health', asyncHandler(async (req: Request, res: Response) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!(await isWhatsAppAdmin(user))) return res.status(403).json({ error: 'OWNER or ADMIN access required' });
+  const connection = await db.whatsAppConnection.findFirst({
+    where: { id: req.params.connectionId, tenantId: user.tenantId },
+    select: { wabaId: true, phoneNumberId: true, accessTokenEncrypted: true, status: true },
+  });
+  if (!connection) return res.status(404).json({ error: 'Connection not found' });
+  if (!connection.accessTokenEncrypted) return res.status(409).json({ error: 'No stored access token', health: 'MISSING_TOKEN' });
+  const version = process.env.META_GRAPH_VERSION || 'v23.0';
+  if (!/^v[0-9]+\.[0-9]+$/.test(version)) return res.status(500).json({ error: 'Invalid Meta Graph version' });
+
+  let token: string;
+  try {
+    token = decryptToken(connection.accessTokenEncrypted);
+  } catch {
+    return res.status(500).json({ error: 'Could not decrypt stored credential', health: 'CREDENTIAL_ERROR' });
+  }
+  try {
+    const waba = await metaGet(connection.wabaId, token, version, { fields: 'id,name' });
+    if (String(waba.id) !== connection.wabaId) throw new Error('WABA mismatch');
+  } catch {
+    return res.json({ health: 'UNHEALTHY', wabaAccess: false, phoneAccess: false, status: connection.status, activationReady: false, note: 'Stored token cannot access this WABA' });
+  }
+  try {
+    const phone = await metaGet(connection.phoneNumberId, token, version, { fields: 'id,display_phone_number' });
+    if (String(phone.id) !== connection.phoneNumberId) throw new Error('Phone mismatch');
+  } catch {
+    return res.json({ health: 'UNHEALTHY', wabaAccess: true, phoneAccess: false, status: connection.status, activationReady: false, note: 'Stored token cannot access this phone number' });
+  }
+  return res.json({
+    health: 'API_VERIFIED',
+    wabaAccess: true,
+    phoneAccess: true,
+    status: connection.status,
+    activationReady: false,
+    note: 'API credentials verified. Webhook routing and sending readiness have not been verified; activation remains pending.',
+  });
 }));
 
 export default router;
