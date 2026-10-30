@@ -410,7 +410,7 @@ router.post('/existing', asyncHandler(async (req: Request, res: Response) => {
   }
   const { wabaId, phoneNumberId, accessToken } = parsed.data;
   const version = process.env.META_GRAPH_VERSION || 'v23.0';
-  if (!/^v\\d+\\.\\d+$/.test(version)) return res.status(500).json({ error: 'Meta Graph version is not configured' });
+  if (!/^v[0-9]+\.[0-9]+$/.test(version)) return res.status(500).json({ error: 'Meta Graph version is not configured' });
 
   let waba: any;
   let verifiedPhone: any;
