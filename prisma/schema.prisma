@@ -100,6 +100,28 @@ model WhatsAppDeliveryEvent {
   eventTime     String
   eventKey      String   @unique
   receivedAt    DateTime @default(now())
+  errorCode     Int?
+  errorTitle    String?
+  errorMessage  String?
 
   @@index([connectionId, messageId])
+}
+
+
+model WhatsAppTestMessage {
+  id            String   @id @default(cuid())
+  tenantId      String
+  connectionId  String
+  messageId     String   @unique
+  recipient     String
+  templateName  String
+  languageCode  String
+  status        String   @default("accepted")
+  errorCode     Int?
+  errorTitle    String?
+  errorMessage  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([tenantId, connectionId, createdAt])
 }
