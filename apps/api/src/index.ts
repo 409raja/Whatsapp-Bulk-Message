@@ -304,154 +304,98 @@ app.get(
   })
 );
 
-// List contacts
-app.get(
-  '/api/v1/contacts',
-  auth,
-  handler(async (req: any, res: any) => {
-    const contacts = await db.contact.findMany({
-      where: {
-        tenantId: req.user.tenantId,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: 100,
-    });
+// Contacts: tenant-scoped search, pagination and safe consent handling
+app.get('/api/v1/contacts', auth, handler(async (req: any, res: any) => {
+  const query = z.object({
+    search: z.string().max(120).optional(),
+    consent: z.enum(['all', 'true', 'false']).default('all'),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  }).safeParse(req.query);
+  if (!query.success) return res.status(400).json({ error: 'Invalid contact filters' });
+  const { search, consent, page, limit } = query.data;
+  const where: any = {
+    tenantId: req.user.tenantId,
+    ...(consent !== 'all' ? { consent: consent === 'true' } : {}),
+    ...(search ? { OR: [
+      { name: { contains: search, mode: 'insensitive' } },
+      { phone: { contains: search } },
+    ] } : {}),
+  };
+  const [total, contacts] = await db.$transaction([
+    db.contact.count({ where }),
+    db.contact.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit }),
+  ]);
+  return res.json({ contacts, total, page, limit, pages: Math.max(1, Math.ceil(total / limit)) });
+}));
 
-    return res.json(contacts);
-  })
-);
+app.post('/api/v1/contacts', auth, handler(async (req: any, res: any) => {
+  const parsed = z.object({
+    name: z.string().max(120).optional(),
+    phone: z.string().regex(/^\+[1-9]\d{7,14}$/),
+    consent: z.literal(true),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Valid E.164 phone and explicit consent required' });
+  const existing = await db.contact.findUnique({ where: { tenantId_phone: {
+    tenantId: req.user.tenantId, phone: parsed.data.phone,
+  } } });
+  if (existing) return res.status(409).json({ error: existing.consent
+    ? 'This phone number already exists' : 'Contact opted out. Do not re-subscribe without verified new consent.' });
+  const contact = await db.contact.create({ data: { ...parsed.data, tenantId: req.user.tenantId } });
+  return res.status(201).json(contact);
+}));
 
-// Create contact
-app.post(
-  '/api/v1/contacts',
-  auth,
-  handler(async (req: any, res: any) => {
-    const parsed = z
-      .object({
-        name: z.string().max(120).optional(),
-        phone: z.string().regex(/^\+[1-9]\d{7,14}$/),
-        consent: z.literal(true),
-      })
-      .safeParse(req.body);
+app.post('/api/v1/contacts/import', auth, handler(async (req: any, res: any) => {
+  const parsed = z.object({ contacts: z.array(z.object({
+    phone: z.string().regex(/^\+[1-9]\d{7,14}$/),
+    name: z.string().max(120).optional(),
+    consent: z.literal(true),
+  })).min(1).max(500) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide up to 500 explicitly opted-in contacts with valid E.164 numbers' });
+  const unique = [...new Map(parsed.data.contacts.map(c => [c.phone, c])).values()];
+  let imported = 0, skipped = 0;
+  for (const contact of unique) {
+    const existing = await db.contact.findUnique({ where: { tenantId_phone: {
+      tenantId: req.user.tenantId, phone: contact.phone,
+    } } });
+    if (existing) { skipped++; continue; }
+    await db.contact.create({ data: { ...contact, tenantId: req.user.tenantId } });
+    imported++;
+  }
+  return res.json({ imported, skipped, duplicates: parsed.data.contacts.length - unique.length });
+}));
 
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: 'Valid E.164 phone and explicit consent required',
-      });
-    }
+app.patch('/api/v1/contacts/:id', auth, handler(async (req: any, res: any) => {
+  const parsed = z.object({
+    name: z.string().max(120).nullable().optional(),
+    phone: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(),
+  }).strict().safeParse(req.body);
+  if (!parsed.success || !Object.keys(parsed.data).length) return res.status(400).json({ error: 'Invalid contact update' });
+  const existing = await db.contact.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } });
+  if (!existing) return res.status(404).json({ error: 'Contact not found' });
+  if (parsed.data.phone && parsed.data.phone !== existing.phone) {
+    const duplicate = await db.contact.findUnique({ where: { tenantId_phone: {
+      tenantId: req.user.tenantId, phone: parsed.data.phone,
+    } } });
+    if (duplicate) return res.status(409).json({ error: 'Phone already exists in this company' });
+  }
+  const updated = await db.contact.update({ where: { id: existing.id }, data: parsed.data });
+  return res.json(updated);
+}));
 
-    const contact = await db.contact.upsert({
-      where: {
-        tenantId_phone: {
-          tenantId: req.user.tenantId,
-          phone: parsed.data.phone,
-        },
-      },
-      create: {
-        tenantId: req.user.tenantId,
-        ...parsed.data,
-      },
-      update: {
-        name: parsed.data.name,
-        consent: true,
-      },
-    });
+app.delete('/api/v1/contacts/:id', auth, handler(async (req: any, res: any) => {
+  const result = await db.contact.deleteMany({ where: { id: req.params.id, tenantId: req.user.tenantId } });
+  if (!result.count) return res.status(404).json({ error: 'Contact not found' });
+  return res.json({ deleted: true });
+}));
 
-    return res.status(201).json(contact);
-  })
-);
-
-// Import opted-in contacts
-app.post(
-  '/api/v1/contacts/import',
-  auth,
-  handler(async (req: any, res: any) => {
-    const parsed = z
-      .object({
-        contacts: z
-          .array(
-            z.object({
-              phone: z.string().regex(/^\+[1-9]\d{7,14}$/),
-              name: z.string().max(120).optional(),
-              consent: z.literal(true),
-            })
-          )
-          .min(1)
-          .max(500),
-      })
-      .safeParse(req.body);
-
-    if (!parsed.success) {
-      return res.status(400).json({
-        error:
-          'Provide up to 500 opted-in contacts with valid E.164 numbers',
-      });
-    }
-
-    const unique = [
-      ...new Map(
-        parsed.data.contacts.map((c) => [c.phone, c])
-      ).values(),
-    ];
-
-    let imported = 0;
-
-    for (const contact of unique) {
-      await db.contact.upsert({
-        where: {
-          tenantId_phone: {
-            tenantId: req.user.tenantId,
-            phone: contact.phone,
-          },
-        },
-        create: {
-          ...contact,
-          tenantId: req.user.tenantId,
-        },
-        update: {
-          name: contact.name,
-          consent: true,
-        },
-      });
-
-      imported++;
-    }
-
-    return res.json({
-      imported,
-      duplicates: parsed.data.contacts.length - imported,
-    });
-  })
-);
-
-// Opt out contact
-app.post(
-  '/api/v1/contacts/:id/opt-out',
-  auth,
-  handler(async (req: any, res: any) => {
-    const result = await db.contact.updateMany({
-      where: {
-        id: req.params.id,
-        tenantId: req.user.tenantId,
-      },
-      data: {
-        consent: false,
-      },
-    });
-
-    if (!result.count) {
-      return res.status(404).json({
-        error: 'Contact not found',
-      });
-    }
-
-    return res.json({
-      suppressed: true,
-    });
-  })
-);
+app.post('/api/v1/contacts/:id/opt-out', auth, handler(async (req: any, res: any) => {
+  const result = await db.contact.updateMany({ where: {
+    id: req.params.id, tenantId: req.user.tenantId,
+  }, data: { consent: false } });
+  if (!result.count) return res.status(404).json({ error: 'Contact not found' });
+  return res.json({ suppressed: true });
+}));
 
 // List campaigns
 app.get(
