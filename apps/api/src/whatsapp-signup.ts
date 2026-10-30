@@ -429,8 +429,20 @@ router.post('/existing', asyncHandler(async (req: Request, res: Response) => {
       nextUrl = typeof data.paging?.next === 'string' ? data.paging.next : undefined;
     }
     if (!verifiedPhone) return res.status(400).json({ error: 'Phone number does not belong to this accessible WABA' });
-  } catch {
-    return res.status(400).json({ error: 'Meta could not verify this token, WABA and phone number. Check permissions and IDs.' });
+  } catch (error) {
+    // Expose the failed verification stage without returning Meta responses,
+    // token contents, or Graph API pagination URLs to the client.
+    const stage = !waba ? 'waba_access' : 'phone_list_access';
+    console.warn('Existing WhatsApp account verification failed', {
+      stage,
+      reason: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return res.status(400).json({
+      error: stage === 'waba_access'
+        ? 'Meta could not verify WABA access. Check the system user token and WhatsApp account permissions.'
+        : 'Meta could not list the phone numbers for this WABA. Check WhatsApp management permissions.',
+      verificationStage: stage,
+    });
   }
 
   const existing = await db.whatsAppConnection.findUnique({ where: { phoneNumberId }, select: { id: true, tenantId: true } });
