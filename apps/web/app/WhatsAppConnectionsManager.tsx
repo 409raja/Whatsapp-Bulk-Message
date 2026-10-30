@@ -72,6 +72,8 @@ export default function WhatsAppConnectionsManager({
   const [existingPhoneId, setExistingPhoneId] = useState('');
   const [existingToken, setExistingToken] = useState('');
   const [savingExisting, setSavingExisting] = useState(false);
+  const [healthById, setHealthById] = useState<Record<string, { health: string; note?: string; wabaAccess?: boolean; phoneAccess?: boolean }>>({});
+  const [checkingId, setCheckingId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -450,6 +452,23 @@ export default function WhatsAppConnectionsManager({
     }
   }
 
+  async function checkConnectionHealth(id: string) {
+    setCheckingId(id);
+    setError('');
+    try {
+      const response = await fetch(`${API}/api/v1/whatsapp/signup/${encodeURIComponent(id)}/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Health check failed');
+      setHealthById((previous) => ({ ...previous, [id]: result }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Health check failed');
+    } finally {
+      setCheckingId(null);
+    }
+  }
+
   async function addExistingAccount(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (savingExisting) return;
@@ -577,6 +596,17 @@ export default function WhatsAppConnectionsManager({
             <p>
               <strong>Status:</strong> {connection.status}
             </p>
+            <button type="button" disabled={checkingId === connection.id} onClick={() => void checkConnectionHealth(connection.id)} style={{ padding: '9px 14px', border: '1px solid #cbd5e1', borderRadius: 8, cursor: 'pointer' }}>
+              {checkingId === connection.id ? 'Checking...' : 'Check API Health'}
+            </button>
+            {healthById[connection.id] && (
+              <div role="status" style={{ marginTop: 10, padding: 12, background: '#f8fafc', borderRadius: 8 }}>
+                <strong>API Health: {healthById[connection.id].health}</strong>
+                <p>WABA access: {healthById[connection.id].wabaAccess ? 'Verified' : 'Not verified'}</p>
+                <p>Phone access: {healthById[connection.id].phoneAccess ? 'Verified' : 'Not verified'}</p>
+                <p>{healthById[connection.id].note}</p>
+              </div>
+            )}
 
             <p>
               <strong>Business Account ID:</strong>{' '}
