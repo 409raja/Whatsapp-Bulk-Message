@@ -8,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
+import webhookBridgeRouter from './webhook-bridge';
 
 
 const db = new PrismaClient();
@@ -108,6 +109,7 @@ const requireWhatsAppAdmin = handler(
 );
 
 app.use('/api/v1/whatsapp/signup', auth, whatsappSignupRouter);
+app.use('/api/v1/internal/whatsapp-bridge', webhookBridgeRouter);
 
 // Health check
 app.get('/health', (_req, res) => {
