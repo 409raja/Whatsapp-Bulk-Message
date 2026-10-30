@@ -386,8 +386,8 @@ router.post(
 
 
 const existingAccountSchema = z.object({
-  wabaId: z.string().regex(/^\\d{8,25}$/),
-  phoneNumberId: z.string().regex(/^\\d{8,25}$/),
+  wabaId: z.string().regex(/^[0-9]{8,25}$/),
+  phoneNumberId: z.string().regex(/^[0-9]{8,25}$/),
   accessToken: z.string().min(30).max(4096),
 }).strict();
 
