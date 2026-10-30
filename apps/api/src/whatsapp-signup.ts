@@ -527,6 +527,7 @@ router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: R
     templateName: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
     languageCode: z.string().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/),
     consentConfirmed: z.literal(true),
+    bodyParameters: z.array(z.string().min(1).max(1024)).min(1).max(10).optional(),
   }).strict().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Valid recipient, approved template, language and consent confirmation required' });
   const connection = await db.whatsAppConnection.findFirst({
@@ -549,7 +550,16 @@ router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: R
         messaging_product: 'whatsapp',
         to: parsed.data.to.slice(1),
         type: 'template',
-        template: { name: parsed.data.templateName, language: { code: parsed.data.languageCode } },
+        template: {
+          name: parsed.data.templateName,
+          language: { code: parsed.data.languageCode },
+          ...(parsed.data.bodyParameters?.length ? {
+            components: [{
+              type: 'body',
+              parameters: parsed.data.bodyParameters.map((value) => ({ type: 'text', text: value })),
+            }],
+          } : {}),
+        },
       }),
       signal: AbortSignal.timeout(15000),
     });
