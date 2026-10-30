@@ -523,7 +523,7 @@ router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: R
   if (!(await isWhatsAppAdmin(user))) return res.status(403).json({ error: 'OWNER or ADMIN access required' });
   if (process.env.WHATSAPP_TEST_SEND_ENABLED !== 'true') return res.status(403).json({ error: 'Test sending is disabled' });
   const parsed = z.object({
-    to: z.string().regex(/^\\+[1-9]\\d{7,14}$/),
+    to: z.string().regex(/^\+[1-9]\d{7,14}$/),
     templateName: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
     languageCode: z.string().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/),
     consentConfirmed: z.literal(true),
@@ -536,7 +536,7 @@ router.post('/:connectionId/test-send', asyncHandler(async (req: Request, res: R
   if (!connection) return res.status(404).json({ error: 'Connection not found' });
   if (!connection.accessTokenEncrypted) return res.status(409).json({ error: 'Stored credential missing' });
   const version = process.env.META_GRAPH_VERSION || 'v23.0';
-  if (!/^v[0-9]+\\.[0-9]+$/.test(version)) return res.status(500).json({ error: 'Invalid Meta version' });
+  if (!/^v[0-9]+\.[0-9]+$/.test(version)) return res.status(500).json({ error: 'Invalid Meta version' });
   let token: string;
   try { token = decryptToken(connection.accessTokenEncrypted); }
   catch { return res.status(500).json({ error: 'Stored credential could not be decrypted' }); }
