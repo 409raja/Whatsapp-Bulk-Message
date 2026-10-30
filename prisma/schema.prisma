@@ -91,3 +91,15 @@ model WhatsAppSignupSession {
 }
 
 
+
+model WhatsAppDeliveryEvent {
+  id            String   @id @default(cuid())
+  connectionId  String
+  messageId     String
+  status        String
+  eventTime     String
+  eventKey      String   @unique
+  receivedAt    DateTime @default(now())
+
+  @@index([connectionId, messageId])
+}
