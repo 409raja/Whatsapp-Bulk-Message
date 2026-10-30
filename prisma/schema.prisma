@@ -54,6 +54,7 @@ model Campaign {
   tenantId     String
   name         String
   templateName String
+  recipientIds Json     @default("[]")
   status       String   @default("DRAFT")
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
   createdAt    DateTime @default(now())
