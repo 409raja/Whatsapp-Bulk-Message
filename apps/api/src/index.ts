@@ -10,6 +10,8 @@ import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
 import { enqueueCampaign, getMockCampaignProgress, getMockDeliveryHistory, retryFailedMockCampaign } from './queue';
 import { aggregateMockStats } from './mock-analytics';
+import { liveEnabled, startLivePilot, liveProgress } from './live-pilot';
+import { liveWebhookGet, liveWebhookPost } from './live-webhook';
 import { decryptToken } from './encryption';
 import { normalizeApprovedTemplates, metaGraphVersion } from './meta-templates';
 
@@ -25,6 +27,9 @@ app.use(
   })
 );
 
+// Register isolated callback before JSON parsing, to verify the exact signed bytes.
+app.get('/api/v1/standalone/meta-webhook', liveWebhookGet);
+app.post('/api/v1/standalone/meta-webhook', express.raw({type:'application/json',limit:'256kb'}), liveWebhookPost);
 app.use(express.json({ limit: '1mb' }));
 
 const secret = process.env.JWT_SECRET;
@@ -348,6 +353,34 @@ app.get('/api/v1/whatsapp/connections/:id/approved-templates', auth, requireWhat
   })
 );
 
+// Verify a specific company's Meta phone before allowing activation.
+app.post('/api/v1/whatsapp/connections/:id/verify-phone', auth, requireWhatsAppAdmin,
+ handler(async(req:any,res:any)=>{
+  const conn=await db.whatsAppConnection.findFirst({where:{id:req.params.id,tenantId:req.user.tenantId}});
+  if(!conn)return res.status(404).json({error:'Connection not found'});
+  if(!conn.accessTokenEncrypted)return res.status(409).json({error:'Connection token missing'});
+  let token:string;
+  try{token=decryptToken(conn.accessTokenEncrypted)}
+  catch{return res.status(409).json({error:'Unable to decrypt connection token'})}
+  const version=metaGraphVersion(process.env.META_GRAPH_VERSION);
+  const url=new URL('https://graph.facebook.com/'+version+'/'+encodeURIComponent(conn.phoneNumberId));
+  url.searchParams.set('fields','id,display_phone_number,verified_name,quality_rating,code_verification_status,status,platform_type');
+  try{
+   const response=await fetch(url,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(15000)});
+   if(!response.ok)return res.status(502).json({error:'Meta phone verification failed; review token permissions'});
+   const data:any=await response.json();
+   if(String(data.id)!==conn.phoneNumberId)return res.status(409).json({error:'Meta phone mismatch'});
+   const connected=data.status==='CONNECTED' && data.code_verification_status==='VERIFIED'
+      && data.platform_type==='CLOUD_API';
+   // Activation is only based on live Meta response, never user-supplied status.
+   await db.whatsAppConnection.updateMany({where:{id:conn.id,tenantId:req.user.tenantId},
+    data:{status:connected?'ACTIVE':'PENDING'}});
+   return res.json({connectionId:conn.id,verified:connected,metaStatus:data.status||null,
+    codeVerificationStatus:data.code_verification_status||null,platformType:data.platform_type||null,
+    qualityRating:data.quality_rating||null,displayPhoneNumber:data.display_phone_number||null});
+  }catch{return res.status(502).json({error:'Meta phone verification temporarily unavailable'})}
+ }));
+ 
 // Contacts: tenant-scoped search, pagination and safe consent handling
 app.get('/api/v1/contacts', auth, handler(async (req: any, res: any) => {
   const query = z.object({
@@ -474,6 +507,9 @@ const campaignDraftSchema = z.object({
   recipientIds: z.array(z.string().min(1)).min(1).max(500),
   name: z.string().trim().min(2).max(120),
   templateName: z.string().trim().min(1).max(120).regex(/^[a-z0-9_]+$/, 'Use lowercase letters, numbers and underscores'),
+  connectionId: z.string().min(1).optional(),
+  templateLanguage: z.string().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/).optional(),
+  templateComponents: z.array(z.record(z.unknown())).max(10).optional(),
 }).strict();
 
 app.post('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
@@ -484,9 +520,15 @@ app.post('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
     const count = await db.contact.count({ where: { tenantId: req.user.tenantId, id: { in: recipientIds }, consent: true } });
     if (count !== recipientIds.length) return res.status(400).json({ error: 'Select only opted-in contacts from your company' });
   }
+  if(parsed.data.connectionId){
+    const conn=await db.whatsAppConnection.findFirst({where:{id:parsed.data.connectionId,tenantId:req.user.tenantId}});
+    if(!conn)return res.status(400).json({error:'Connection does not belong to this company'});
+    if(!parsed.data.templateLanguage)return res.status(400).json({error:'Template language required'});
+  }
   const campaign = await db.campaign.create({ data: {
     tenantId: req.user.tenantId, name: parsed.data.name, templateName: parsed.data.templateName,
-    recipientIds, status: 'DRAFT',
+    connectionId:parsed.data.connectionId||null,templateLanguage:parsed.data.templateLanguage||null,
+    templateComponents:parsed.data.templateComponents||[],recipientIds, status: 'DRAFT',
   } });
   return res.status(201).json(campaign);
 }));
@@ -499,9 +541,16 @@ app.patch('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => {
     const count = await db.contact.count({ where: { tenantId: req.user.tenantId, id: { in: recipientIds }, consent: true } });
     if (count !== recipientIds.length) return res.status(400).json({ error: 'Select only opted-in contacts from your company' });
   }
+  if(parsed.data.connectionId){
+    const conn=await db.whatsAppConnection.findFirst({where:{id:parsed.data.connectionId,tenantId:req.user.tenantId}});
+    if(!conn)return res.status(400).json({error:'Connection does not belong to this company'});
+    if(!parsed.data.templateLanguage)return res.status(400).json({error:'Template language required'});
+  }
   const updated = await db.campaign.updateMany({
     where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' },
-    data: { name: parsed.data.name, templateName: parsed.data.templateName, recipientIds },
+    data: { name: parsed.data.name, templateName: parsed.data.templateName, recipientIds,
+      connectionId:parsed.data.connectionId||null,templateLanguage:parsed.data.templateLanguage||null,
+      templateComponents:parsed.data.templateComponents||[] },
   });
   if (!updated.count) return res.status(404).json({ error: 'Editable draft not found' });
   return res.json(await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } }));
@@ -556,6 +605,16 @@ app.post('/api/v1/campaigns/:id/mock-retry', auth, requireWhatsAppAdmin, handler
   } catch(error) {
     return res.status(409).json({ error: error instanceof Error ? error.message : 'Retry failed' });
   }
+}));
+
+// Live sending requires explicit pilot flags. Normal campaign start remains disabled.
+app.get('/api/v1/campaigns/:id/live-progress',auth,requireWhatsAppAdmin,handler(async(req:any,res:any)=>{
+ return res.json(await liveProgress(req.params.id,req.user.tenantId));
+}));
+app.post('/api/v1/campaigns/:id/live-pilot-start',auth,requireWhatsAppAdmin,handler(async(req:any,res:any)=>{
+ if(!liveEnabled())return res.status(403).json({error:'Live pilot feature disabled'});
+ try{return res.status(202).json(await startLivePilot(req.params.id,req.user.tenantId))}
+ catch(err){return res.status(409).json({error:err instanceof Error?err.message:'Live pilot not available'})}
 }));
 
 // Do not enable sending without approved templates, audience selection,
