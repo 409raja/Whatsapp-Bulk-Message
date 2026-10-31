@@ -41,15 +41,20 @@ async function runBatch(size: number) {
  const started = performance.now();
  await queue.addBulk(jobs);
  // QueueEvents are ready before awaiting job completions.
- const results = await Promise.allSettled(jobs.map(async j => {
+ // Bounded waiting prevents hundreds of simultaneous EventEmitter listeners.
+ // Using chunks also bounds Redis requests without altering the synthetic job volume.
+ for (let offset = 0; offset < jobs.length; offset += 8) {
+  const chunk = jobs.slice(offset, offset + 8);
+  const results = await Promise.allSettled(chunk.map(async j => {
    const job = await queue.getJob(j.opts.jobId);
    if (!job) throw Error('Missing synthetic queue job');
    const t = performance.now();
    const value = await job.waitUntilFinished(events, 120000);
    if (!value?.id?.startsWith('mock-')) throw Error('Unexpected mock result');
    latencies.push(performance.now()-t);
- }));
- for (const r of results) if (r.status==='fulfilled') succeeded++; else failed++;
+  }));
+  for (const r of results) if (r.status === 'fulfilled') succeeded++; else failed++;
+ }
  latencies.sort((a,b)=>a-b);
  const elapsedMs = performance.now()-started;
  const p95Ms = latencies.length ? latencies[Math.min(latencies.length-1,Math.ceil(latencies.length*.95)-1)] : 0;
