@@ -23,6 +23,8 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [mockEnabled, setMockEnabled] = useState(false);
+  const [mockProgress, setMockProgress] = useState<Record<string,string>>({});
   const request = useCallback(async (path: string, init?: RequestInit) => {
     const response = await fetch(API + path, { ...init, headers: {
       Authorization: 'Bearer ' + token,
@@ -73,6 +75,25 @@ export default function CampaignsManager({ token }: { token: string }) {
       setMessage('Draft deleted'); await load();
     } catch (e) { setError(e instanceof Error ? e.message : 'Delete failed'); }
     finally { setSaving(false); }
+  }
+  useEffect(() => {
+    void request('/api/v1/campaigns/mock-mode').then(data=>setMockEnabled(Boolean(data.enabled))).catch(()=>setMockEnabled(false));
+  },[request]);
+  async function mockStart(c:Campaign) {
+    setSaving(true); setError(''); setMessage('');
+    try {
+      await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/mock-start',{method:'POST'});
+      setMessage('Mock campaign queued; no real WhatsApp message sent');
+      await load(); await checkMock(c.id);
+    } catch(e) { setError(e instanceof Error ? e.message : 'Mock start failed'); }
+    finally { setSaving(false); }
+  }
+  async function checkMock(id:string) {
+    try {
+      const r=await request('/api/v1/campaigns/'+encodeURIComponent(id)+'/mock-progress');
+      const c=r.counts||{};
+      setMockProgress(p=>({...p,[id]:'MOCK_SENT '+(c.MOCK_SENT||0)+'/'+r.total+' | Active '+(c.active||0)+' | Failed '+(c.failed||0)}));
+    } catch(e) { setError(e instanceof Error ? e.message : 'Progress check failed'); }
   }
   const filtered = campaigns.filter(c =>
     (filter === 'ALL' || c.status === filter) &&
@@ -227,9 +248,12 @@ export default function CampaignsManager({ token }: { token: string }) {
                   {c.status === 'DRAFT' && (
                     <div className="campaign-list-actions">
                       <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
+                      {mockEnabled && <button disabled={saving} onClick={() => void mockStart(c)}>Start Mock</button>}
                       <button aria-label={`Delete ${c.name}`} disabled={saving} onClick={() => void remove(c)}>Delete</button>
                     </div>
                   )}
+                  {mockEnabled && c.status === 'QUEUED' && <button disabled={saving} onClick={()=>void checkMock(c.id)}>Check Mock Progress</button>}
+                  {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>}
                 </td>
               </tr>
             ))}</tbody>
