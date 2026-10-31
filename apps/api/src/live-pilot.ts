@@ -68,6 +68,13 @@ export async function liveProgress(campaignId:string,tenantId:string){
   where:{campaignId,tenantId},select:{contactId:true,status:true,attempts:true,messageId:true,lastError:true},
   orderBy:{createdAt:'asc'},take:100
  });
+ // Reconcile campaign status only after all recipients reached a final delivery state.
+ // ACCEPTED/SENT are not proof of delivery, and UNKNOWN requires manual investigation.
+ if (deliveries.length > 0 && deliveries.every(d => ['FAILED','SKIPPED','DELIVERED','READ'].includes(d.status))) {
+  const succeeded=deliveries.filter(d=>['DELIVERED','READ'].includes(d.status)).length;
+  const next=succeeded===deliveries.length?'COMPLETED':succeeded>0?'PARTIAL':'FAILED';
+  await db.campaign.updateMany({where:{id:campaignId,tenantId,status:'QUEUED'},data:{status:next}});
+ }
  return {mode:'LIVE',deliveries};
 }
 
