@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { Queue, Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { MockProvider } from './provider';
+import { mockCampaignStatus } from './mock-lifecycle';
 
 const db = new PrismaClient();
 const connection = {
@@ -86,9 +87,7 @@ export async function getMockCampaignProgress(campaignId: string, tenantId: stri
   const terminal = counts.MOCK_SENT + counts.failed + counts.skipped;
   let status = campaign.status;
   if (status === 'QUEUED' && ids.length > 0 && remaining === 0 && terminal === ids.length) {
-    const next = counts.failed || counts.skipped
-      ? (counts.MOCK_SENT ? 'PARTIAL' : 'FAILED')
-      : 'COMPLETED';
+    const next = mockCampaignStatus(counts);
     const updated = await db.campaign.updateMany({
       where: { id: campaignId, tenantId, status: 'QUEUED' },
       data: { status: next },
@@ -111,11 +110,8 @@ export async function retryFailedMockCampaign(campaignId: string, tenantId: stri
     if (job && await job.getState() === 'failed') retryIds.push(id);
   }
   if (!retryIds.length) throw Error('No failed mock jobs to retry');
-  const consented = await db.contact.findMany({
-    where: { id: { in: retryIds }, tenantId, consent: true },
-    select: { id: true },
-  });
-  const allowed = new Set(consented.map(c => c.id));
+  const consented = await db.contact.count({ where: { id: { in: retryIds }, tenantId, consent: true } });
+  if (consented !== retryIds.length) throw Error('Some failed recipients have opted out; retry cancelled');
   const claimed = await db.campaign.updateMany({
     where: { id: campaignId, tenantId, status: { in: ['FAILED', 'PARTIAL'] } },
     data: { status: 'QUEUED' },
@@ -124,10 +120,7 @@ export async function retryFailedMockCampaign(campaignId: string, tenantId: stri
   for (const id of retryIds) {
     const job = await campaignQueue.getJob(jobId(campaignId, id));
     if (!job) continue;
-    if (!allowed.has(id)) {
-      // The worker will skip a contact whose consent has been revoked.
-      await job.retry();
-    } else await job.retry();
+    await job.retry();
   }
   return { retried: retryIds.length };
 }
