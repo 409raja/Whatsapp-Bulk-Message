@@ -496,8 +496,8 @@ app.get('/api/v1/campaigns/mock-analytics', auth, requireWhatsAppAdmin, handler(
   if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
   const tenantId = req.user.tenantId;
   const [campaigns, grouped] = await db.$transaction([
-    db.campaign.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
-    db.mockCampaignDelivery.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
+    db.campaign.groupBy({ by: ['status'], where: { tenantId }, orderBy: { status: 'asc' }, _count: { _all: true } }),
+    db.mockCampaignDelivery.groupBy({ by: ['status'], where: { tenantId }, orderBy: { status: 'asc' }, _count: { _all: true } }),
   ]);
   return res.json(aggregateMockStats(campaigns, grouped));
 }));
