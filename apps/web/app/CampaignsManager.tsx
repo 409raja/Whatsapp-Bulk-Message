@@ -107,10 +107,15 @@ export default function CampaignsManager({ token }: { token: string }) {
   useEffect(() => {
     if (!mockEnabled || !campaigns.some(c => c.status === 'QUEUED')) return;
     let cancelled=false;
+    let busy=false;
     const refresh=async () => {
-      const queued=campaigns.filter(c=>c.status==='QUEUED');
-      await Promise.all(queued.map(c=>checkMock(c.id)));
-      if (!cancelled) await load();
+      if (busy || cancelled) return;
+      busy=true;
+      try {
+        const queued=campaigns.filter(c=>c.status==='QUEUED');
+        await Promise.all(queued.map(c=>checkMock(c.id)));
+        if (!cancelled) await load();
+      } finally { busy=false; }
     };
     const id=setInterval(() => { void refresh(); },3000);
     return () => {cancelled=true;clearInterval(id);};
