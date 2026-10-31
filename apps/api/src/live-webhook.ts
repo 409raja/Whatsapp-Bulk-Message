@@ -6,6 +6,17 @@ export function normalizedDeliveryStatus(v:unknown):string|null{
  return typeof v==='string' && ['sent','delivered','read','failed'].includes(v)
   ?v.toUpperCase():null;
 }
+// Preserve a safe, bounded diagnostic from signed Meta delivery failures.
+export function metaFailureDiagnostic(errors:unknown):string {
+ if(!Array.isArray(errors)||errors.length===0)return 'Meta reported failed; no error details supplied';
+ const first=errors[0];
+ if(!first||typeof first!=='object')return 'Meta reported failed; invalid error details';
+ const item=first as {code?:unknown;title?:unknown;message?:unknown};
+ const code=typeof item.code==='number' && Number.isSafeInteger(item.code)?String(item.code):'unknown';
+ // Do not persist arbitrary descriptions / error_data: they can contain recipient details.
+ const title=typeof item.title==='string'?item.title.replace(/[\r\n\t]/g,' ').slice(0,120):'Delivery failed';
+ return ('Meta error '+code+': '+title).slice(0,220);
+}
 export function liveWebhookGet(req:any,res:any){
  const token=process.env.META_WEBHOOK_VERIFY_TOKEN;
  if(!token)return res.sendStatus(503);
@@ -29,7 +40,7 @@ export async function liveWebhookPost(req:any,res:any){
    if(!connection)continue;
    if(Array.isArray(change?.value?.statuses))for(const status of change.value.statuses){
     const normalized=normalizedDeliveryStatus(status?.status);
-    if(normalized && typeof status?.id==='string')updates.push({connection,normalized,messageId:status.id});
+    if(normalized && typeof status?.id==='string')updates.push({connection,normalized,messageId:status.id,diagnostic:normalized==='FAILED'?metaFailureDiagnostic(status.errors):null});
    }
   }
  }
@@ -40,7 +51,7 @@ export async function liveWebhookPost(req:any,res:any){
     messageId:item.messageId,connectionId:item.connection.id,tenantId:item.connection.tenantId}});
    if(!row||!rank[item.normalized])continue;
    if((rank[row.status]||0)>rank[item.normalized])continue;
-   await db.liveCampaignDelivery.updateMany({where:{id:row.id,status:row.status},data:{status:item.normalized}});
+   await db.liveCampaignDelivery.updateMany({where:{id:row.id,status:row.status},data:{status:item.normalized,...(item.normalized==='FAILED'?{lastError:item.diagnostic}:{})}});
   }
   return res.sendStatus(200);
  }catch(error){console.error('Standalone live webhook persistence failed',error);return res.sendStatus(503)}
