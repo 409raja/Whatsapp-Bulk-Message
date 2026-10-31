@@ -22,6 +22,26 @@ export async function startLivePilot(campaignId:string,tenantId:string){
  if(count!==recipients.length) throw new Error('Recipient consent changed');
  const connection=await db.whatsAppConnection.findFirst({where:{id:campaign.connectionId,tenantId,status:'ACTIVE'}});
  if(!connection||!connection.accessTokenEncrypted) throw new Error('Verified active connection required');
+ // Confirm exact template and language belong to this company's WABA.
+ // App Review approval alone is not proof a particular template can be sent.
+ let token:string;
+ try{token=decryptToken(connection.accessTokenEncrypted)}
+ catch{throw new Error('Connection credential unavailable')}
+ const version=process.env.META_GRAPH_VERSION||'v23.0';
+ if(!/^v\d+\.\d+$/.test(version))throw new Error('Invalid Graph version');
+ const templateUrl=new URL('https://graph.facebook.com/'+version+'/'+connection.wabaId+'/message_templates');
+ templateUrl.searchParams.set('fields','name,language,status');
+ templateUrl.searchParams.set('name',campaign.templateName);
+ templateUrl.searchParams.set('limit','100');
+ let approved=false;
+ try{
+  const response=await fetch(templateUrl,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(15000)});
+  if(!response.ok)throw new Error('Template verification failed');
+  const body:any=await response.json();
+  approved=Array.isArray(body.data)&&body.data.some((t:any)=>t.name===campaign.templateName &&
+    t.language===campaign.templateLanguage && t.status==='APPROVED');
+ }catch{throw new Error('Cannot verify approved Meta template')}
+ if(!approved)throw new Error('Template and language are not approved for this WABA');
  const claimed=await db.campaign.updateMany({where:{id:campaignId,tenantId,status:'DRAFT'},data:{status:'QUEUED'}});
  if(claimed.count!==1) throw new Error('Pilot already started');
  await db.liveCampaignDelivery.createMany({
