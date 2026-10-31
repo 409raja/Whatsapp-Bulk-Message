@@ -5,7 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
 import { enqueueCampaign, getMockCampaignProgress, getMockDeliveryHistory, retryFailedMockCampaign } from './queue';
@@ -529,7 +529,7 @@ app.post('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
   const campaign = await db.campaign.create({ data: {
     tenantId: req.user.tenantId, name: parsed.data.name, templateName: parsed.data.templateName,
     connectionId:parsed.data.connectionId||null,templateLanguage:parsed.data.templateLanguage||null,
-    templateComponents:parsed.data.templateComponents||[],recipientIds, status: 'DRAFT',
+    templateComponents:JSON.parse(JSON.stringify(parsed.data.templateComponents ?? [])) as Prisma.InputJsonValue,recipientIds, status: 'DRAFT',
   } });
   return res.status(201).json(campaign);
 }));
@@ -551,7 +551,7 @@ app.patch('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => {
     where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' },
     data: { name: parsed.data.name, templateName: parsed.data.templateName, recipientIds,
       connectionId:parsed.data.connectionId||null,templateLanguage:parsed.data.templateLanguage||null,
-      templateComponents:parsed.data.templateComponents||[] },
+      templateComponents:JSON.parse(JSON.stringify(parsed.data.templateComponents ?? [])) as Prisma.InputJsonValue },
   });
   if (!updated.count) return res.status(404).json({ error: 'Editable draft not found' });
   return res.json(await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } }));
