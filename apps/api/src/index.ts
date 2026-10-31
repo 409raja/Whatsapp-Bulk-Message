@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
-import { enqueueCampaign, getMockCampaignProgress } from './queue';
+import { enqueueCampaign, getMockCampaignProgress, retryFailedMockCampaign } from './queue';
 
 
 const db = new PrismaClient();
@@ -489,6 +489,14 @@ app.get('/api/v1/campaigns/:id/mock-progress', auth, requireWhatsAppAdmin, handl
   const campaign = await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } });
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   return res.json(await getMockCampaignProgress(campaign.id, req.user.tenantId));
+}));
+app.post('/api/v1/campaigns/:id/mock-retry', auth, requireWhatsAppAdmin, handler(async(req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  try {
+    return res.status(202).json(await retryFailedMockCampaign(req.params.id, req.user.tenantId));
+  } catch(error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : 'Retry failed' });
+  }
 }));
 
 // Do not enable sending without approved templates, audience selection,
