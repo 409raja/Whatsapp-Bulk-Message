@@ -25,6 +25,8 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [message, setMessage] = useState('');
   const [mockEnabled, setMockEnabled] = useState(false);
   const [mockProgress, setMockProgress] = useState<Record<string,string>>({});
+  const [mockHistory, setMockHistory] = useState<Record<string, Array<{contactId:string;status:string;attempts:number;lastError:string|null}>>>({});
+  const [openHistory, setOpenHistory] = useState<string|null>(null);
   const request = useCallback(async (path: string, init?: RequestInit) => {
     const response = await fetch(API + path, { ...init, headers: {
       Authorization: 'Bearer ' + token,
@@ -94,6 +96,15 @@ export default function CampaignsManager({ token }: { token: string }) {
       const c=r.counts||{};
       setMockProgress(p=>({...p,[id]:'MOCK_SENT '+(c.MOCK_SENT||0)+'/'+r.total+' | Active '+(c.active||0)+' | Failed '+(c.failed||0)}));
     } catch(e) { setError(e instanceof Error ? e.message : 'Progress check failed'); }
+  }
+  async function historyMock(c:Campaign) {
+    if (openHistory===c.id) { setOpenHistory(null);return; }
+    setError('');
+    try {
+      const result=await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/mock-history');
+      setMockHistory(prev=>({...prev,[c.id]:result.history||[]}));
+      setOpenHistory(c.id);
+    } catch(e) {setError(e instanceof Error?e.message:'History unavailable');}
   }
   async function retryMock(c:Campaign) {
     setSaving(true); setError(''); setMessage('');
@@ -283,7 +294,15 @@ export default function CampaignsManager({ token }: { token: string }) {
                   )}
                   {mockEnabled && c.status === 'QUEUED' && <button disabled={saving} onClick={()=>void checkMock(c.id)}>Check Mock Progress</button>}
                   {mockEnabled && ['FAILED','PARTIAL'].includes(c.status) && <button disabled={saving} onClick={()=>void retryMock(c)}>Retry Failed Mock</button>}
-                  {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>}
+                  {mockEnabled && c.status !== 'DRAFT' && <button disabled={saving} onClick={()=>void historyMock(c)}>{openHistory===c.id?'Hide History':'Mock History'}</button>}
+                  {openHistory===c.id && <div role="region" aria-label={c.name+' mock delivery history'} style={{maxHeight:260,overflow:'auto',minWidth:250}}>
+                    {(mockHistory[c.id]||[]).map(h=><div key={h.contactId} style={{borderBottom:'1px solid #ddd',padding:'6px 0',fontSize:12}}>
+                      <strong>{h.status}</strong> · Contact {h.contactId.slice(0,8)} · Attempts {h.attempts}
+                      {h.lastError && <div role="alert">{h.lastError}</div>}
+                    </div>)}
+                    {(mockHistory[c.id]||[]).length===0 && <small>No history recorded for this campaign</small>}
+                  </div>}
+                  {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>
                 </td>
               </tr>
             ))}</tbody>
