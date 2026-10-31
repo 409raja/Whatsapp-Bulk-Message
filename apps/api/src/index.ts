@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
-import { enqueueCampaign, getMockCampaignProgress, retryFailedMockCampaign } from './queue';
+import { enqueueCampaign, getMockCampaignProgress, getMockDeliveryHistory, retryFailedMockCampaign } from './queue';
 
 
 const db = new PrismaClient();
@@ -489,6 +489,11 @@ app.get('/api/v1/campaigns/:id/mock-progress', auth, requireWhatsAppAdmin, handl
   const campaign = await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } });
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   return res.json(await getMockCampaignProgress(campaign.id, req.user.tenantId));
+}));
+app.get('/api/v1/campaigns/:id/mock-history', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const history = await getMockDeliveryHistory(req.params.id, req.user.tenantId);
+  return res.json({ history });
 }));
 app.post('/api/v1/campaigns/:id/mock-retry', auth, requireWhatsAppAdmin, handler(async(req: any, res: any) => {
   if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
