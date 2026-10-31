@@ -490,6 +490,35 @@ app.get('/api/v1/campaigns/:id/mock-progress', auth, requireWhatsAppAdmin, handl
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   return res.json(await getMockCampaignProgress(campaign.id, req.user.tenantId));
 }));
+// Tenant-scoped mock analytics. These are simulations, not WhatsApp delivery receipts.
+app.get('/api/v1/campaigns/mock-analytics', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const tenantId = req.user.tenantId;
+  const [campaigns, grouped] = await db.$transaction([
+    db.campaign.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
+    db.mockCampaignDelivery.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
+  ]);
+  const sum = (rows: Array<{ status: string; _count: { _all: number } }>, status: string) =>
+    rows.find(row => row.status === status)?._count._all || 0;
+  return res.json({
+    mode: 'MOCK_ONLY',
+    campaigns: {
+      total: campaigns.reduce((n: number, row: any) => n + row._count._all, 0),
+      completed: sum(campaigns, 'COMPLETED'),
+      partial: sum(campaigns, 'PARTIAL'),
+      failed: sum(campaigns, 'FAILED'),
+      queued: sum(campaigns, 'QUEUED'),
+    },
+    deliveries: {
+      mockSent: sum(grouped, 'MOCK_SENT'),
+      failed: sum(grouped, 'FAILED'),
+      skipped: sum(grouped, 'SKIPPED'),
+      queued: sum(grouped, 'QUEUED'),
+      active: sum(grouped, 'ACTIVE'),
+    },
+  });
+}));
+
 app.get('/api/v1/campaigns/:id/mock-history', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
   if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
   const history = await getMockDeliveryHistory(req.params.id, req.user.tenantId);
