@@ -5,6 +5,8 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[] };
 type Contact = { id: string; name: string | null; phone: string };
 type Audience = { eligible: number; optedOut: number; total: number };
+type WhatsAppConnection = {id:string;label:string;displayPhoneNumber:string|null;status:string};
+type ApprovedTemplate = {id:string;name:string;language:string;category:string;parameterized:boolean};
 type MockAnalytics = {mode:string;campaigns:{total:number;completed:number;partial:number;failed:number;queued:number};deliveries:{mockSent:number;failed:number;skipped:number;queued:number;active:number}};
 const input: CSSProperties = { padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, width: '100%', boxSizing: 'border-box' };
 
@@ -16,6 +18,11 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [audience, setAudience] = useState<Audience | null>(null);
   const [name, setName] = useState('');
   const [templateName, setTemplateName] = useState('');
+  const [connections, setConnections] = useState<WhatsAppConnection[]>([]);
+  const [connectionId, setConnectionId] = useState('');
+  const [approvedTemplates, setApprovedTemplates] = useState<ApprovedTemplate[]>([]);
+  const [templateLookupNote, setTemplateLookupNote] = useState('');
+  const [templateLookupLoading, setTemplateLookupLoading] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -52,6 +59,28 @@ export default function CampaignsManager({ token }: { token: string }) {
     finally { if (!signal?.aborted) setLoading(false); }
   }, [request]);
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
+  useEffect(() => {
+    let cancelled=false;
+    void request('/api/v1/whatsapp/connections').then((items: WhatsAppConnection[]) => {
+      if (!cancelled) setConnections(items);
+    }).catch(() => { if (!cancelled) setConnections([]); });
+    return () => { cancelled=true; };
+  },[request]);
+  async function lookUpApprovedTemplates() {
+    if (!connectionId) return;
+    setTemplateLookupLoading(true);
+    setTemplateLookupNote('');
+    setApprovedTemplates([]);
+    try {
+      const data=await request('/api/v1/whatsapp/connections/'+encodeURIComponent(connectionId)+'/approved-templates');
+      setApprovedTemplates(data.templates||[]);
+      setTemplateLookupNote((data.templates||[]).length
+        ? 'Approved templates loaded. '+(data.hasMore ? 'Only first 100 fetched. ' : '')+'Live sending remains disabled.'
+        : 'No approved templates returned for this connection; check WABA, token and permissions.');
+    } catch(e) {
+      setTemplateLookupNote(e instanceof Error?e.message:'Template lookup failed');
+    } finally { setTemplateLookupLoading(false); }
+  }
   function reset() { setEditing(null); setName(''); setTemplateName(''); setSelected([]); setComposerOpen(false); }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setError(''); setMessage('');
@@ -208,9 +237,28 @@ export default function CampaignsManager({ token }: { token: string }) {
             <input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Customer updates" minLength={2} maxLength={120} required />
           </label>
           <label className="manager-field">
-            WhatsApp template
+            WhatsApp business connection (read-only lookup)
+            <select style={input} value={connectionId} onChange={e=>{setConnectionId(e.target.value);setApprovedTemplates([]);setTemplateLookupNote('');}}>
+              <option value="">Choose connected number</option>
+              {connections.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayPhoneNumber||'Number pending'} ({c.status})</option>)}
+            </select>
+          </label>
+          <div>
+            <button type="button" className="manager-secondary-button" disabled={!connectionId||templateLookupLoading}
+              onClick={()=>void lookUpApprovedTemplates()}>{templateLookupLoading?'Checking Meta…':'Load approved templates'}</button>
+            {templateLookupNote && <p role="status" className="manager-field-hint">{templateLookupNote}</p>}
+            {approvedTemplates.length>0 && <label className="manager-field">
+              Approved Meta template
+              <select style={input} value="" onChange={e=>{if(e.target.value)setTemplateName(e.target.value);}}>
+                <option value="">Select a template for this draft</option>
+                {approvedTemplates.map(t=><option key={t.id} value={t.name}>{t.name} ({t.language}, {t.category}{t.parameterized?', variables required':''})</option>)}
+              </select>
+            </label>}
+          </div>
+          <label className="manager-field">
+            WhatsApp template identifier
             <input style={input} value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. customer_update" maxLength={120} required />
-            <span className="manager-field-hint">Use the template identifier approved in Meta.</span>
+            <span className="manager-field-hint">This draft saves only the template name; connection, language and variables are not yet persisted for live sending.</span>
           </label>
         </div>
 
