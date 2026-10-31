@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[] };
+type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[]; connectionId?:string|null;templateLanguage?:string|null;templateComponents?:unknown[] };
 type Contact = { id: string; name: string | null; phone: string };
 type Audience = { eligible: number; optedOut: number; total: number };
 type WhatsAppConnection = {id:string;label:string;displayPhoneNumber:string|null;status:string};
@@ -18,6 +18,10 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [audience, setAudience] = useState<Audience | null>(null);
   const [name, setName] = useState('');
   const [templateName, setTemplateName] = useState('');
+  const [templateLanguage,setTemplateLanguage]=useState('en_US');
+  const [templateComponents,setTemplateComponents]=useState('[]');
+  const [verification,setVerification]=useState('');
+  const [liveHistory,setLiveHistory]=useState<Record<string,string>>({});
   const [connections, setConnections] = useState<WhatsAppConnection[]>([]);
   const [connectionId, setConnectionId] = useState('');
   const [approvedTemplates, setApprovedTemplates] = useState<ApprovedTemplate[]>([]);
@@ -66,6 +70,24 @@ export default function CampaignsManager({ token }: { token: string }) {
     }).catch(() => { if (!cancelled) setConnections([]); });
     return () => { cancelled=true; };
   },[request]);
+  async function verifyPhone() {
+    if(!connectionId)return;
+    setVerification('Checking phone with Meta…');
+    try {
+      const x=await request('/api/v1/whatsapp/connections/'+encodeURIComponent(connectionId)+'/verify-phone',{method:'POST'});
+      setVerification(x.verified?'Verified and ACTIVE: '+(x.displayPhoneNumber||'business number'):
+        'Not active: Meta status '+(x.metaStatus||'unknown')+'; verification '+(x.codeVerificationStatus||'unknown'));
+      const items=await request('/api/v1/whatsapp/connections');
+      setConnections(items);
+    }catch(e){setVerification(e instanceof Error?e.message:'Verification failed')}
+  }
+  async function checkLiveProgress(c:Campaign) {
+    try {
+      const x=await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/live-progress');
+      setLiveHistory(prev=>({...prev,[c.id]:(x.deliveries||[]).map((d:any)=>
+        d.status+' · Contact '+String(d.contactId).slice(0,8)+' · Attempts '+d.attempts).join(' | ')||'No live sends'}));
+    }catch(e){setError(e instanceof Error?e.message:'Live history unavailable')}
+  }
   async function lookUpApprovedTemplates() {
     if (!connectionId) return;
     setTemplateLookupLoading(true);
@@ -81,10 +103,17 @@ export default function CampaignsManager({ token }: { token: string }) {
       setTemplateLookupNote(e instanceof Error?e.message:'Template lookup failed');
     } finally { setTemplateLookupLoading(false); }
   }
-  function reset() { setEditing(null); setName(''); setTemplateName(''); setSelected([]); setComposerOpen(false); }
+  function reset() { setEditing(null); setName(''); setTemplateName(''); setTemplateLanguage('en_US'); setTemplateComponents('[]'); setConnectionId(''); setSelected([]); setComposerOpen(false); }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setError(''); setMessage('');
-    const payload = { name: name.trim(), templateName: templateName.trim(), recipientIds: selected };
+    let parsedComponents:Record<string,unknown>[];
+    try {
+      const value=JSON.parse(templateComponents);
+      if(!Array.isArray(value)||value.length>10||value.some(x=>!x||typeof x!=='object'||Array.isArray(x))) throw Error();
+      parsedComponents=value;
+    } catch {setError('Template components must be a JSON array (e.g. []), maximum 10 objects');return;}
+    const payload = { name: name.trim(), templateName: templateName.trim(), recipientIds: selected,
+      ...(connectionId?{connectionId,templateLanguage,templateComponents:parsedComponents}:{}) };
     if (payload.name.length < 2 || !/^[a-z0-9_]+$/.test(payload.templateName)) {
       setError('Enter a campaign name and a lowercase template identifier (letters, digits, underscores)'); return;
     }
@@ -246,19 +275,29 @@ export default function CampaignsManager({ token }: { token: string }) {
           <div>
             <button type="button" className="manager-secondary-button" disabled={!connectionId||templateLookupLoading}
               onClick={()=>void lookUpApprovedTemplates()}>{templateLookupLoading?'Checking Meta…':'Load approved templates'}</button>
+            <button type="button" className="manager-secondary-button" disabled={!connectionId}
+              onClick={()=>void verifyPhone()}>Verify phone status</button>
+            {verification&&<p role="status" className="manager-field-hint">{verification}</p>}
             {templateLookupNote && <p role="status" className="manager-field-hint">{templateLookupNote}</p>}
             {approvedTemplates.length>0 && <label className="manager-field">
               Approved Meta template
-              <select style={input} value="" onChange={e=>{if(e.target.value)setTemplateName(e.target.value);}}>
+              <select style={input} value="" onChange={e=>{const t=approvedTemplates.find(x=>x.id===e.target.value);if(t){setTemplateName(t.name);setTemplateLanguage(t.language);}}}>
                 <option value="">Select a template for this draft</option>
-                {approvedTemplates.map(t=><option key={t.id} value={t.name}>{t.name} ({t.language}, {t.category}{t.parameterized?', variables required':''})</option>)}
+                {approvedTemplates.map(t=><option key={t.id} value={t.id}>{t.name} ({t.language}, {t.category}{t.parameterized?', variables required':''})</option>)}
               </select>
             </label>}
           </div>
           <label className="manager-field">
             WhatsApp template identifier
             <input style={input} value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. customer_update" maxLength={120} required />
-            <span className="manager-field-hint">This draft saves only the template name; connection, language and variables are not yet persisted for live sending.</span>
+            <span className="manager-field-hint">Select your approved template and matching language. Live pilot is separately gated.</span>
+          </label>
+          <label className="manager-field">Template language
+            <input style={input} value={templateLanguage} onChange={e=>setTemplateLanguage(e.target.value)} placeholder="en_US" />
+          </label>
+          <label className="manager-field">Template component JSON (advanced; leave [] for no variables)
+            <textarea style={input} rows={3} value={templateComponents} onChange={e=>setTemplateComponents(e.target.value)} />
+            <span className="manager-field-hint">Use Meta's template components schema. Do not include secrets. Variable templates require correct component mapping.</span>
           </label>
         </div>
 
@@ -352,7 +391,7 @@ export default function CampaignsManager({ token }: { token: string }) {
                 <td>
                   {c.status === 'DRAFT' && (
                     <div className="campaign-list-actions">
-                      <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
+                      <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setConnectionId(c.connectionId||'');setTemplateLanguage(c.templateLanguage||'en_US');setTemplateComponents(JSON.stringify(c.templateComponents||[])); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
                       {mockEnabled && <button disabled={saving} onClick={() => void mockStart(c)}>Start Mock</button>}
                       <button aria-label={`Delete ${c.name}`} disabled={saving} onClick={() => void remove(c)}>Delete</button>
                     </div>
@@ -360,6 +399,8 @@ export default function CampaignsManager({ token }: { token: string }) {
                   {mockEnabled && c.status === 'QUEUED' && <button disabled={saving} onClick={()=>void checkMock(c.id)}>Check Mock Progress</button>}
                   {mockEnabled && ['FAILED','PARTIAL'].includes(c.status) && <button disabled={saving} onClick={()=>void retryMock(c)}>Retry Failed Mock</button>}
                   {mockEnabled && c.status !== 'DRAFT' && <button disabled={saving} onClick={()=>void historyMock(c)}>{openHistory===c.id?'Hide History':'Mock History'}</button>}
+                  {c.connectionId && c.status !== 'DRAFT' && <button disabled={saving} onClick={()=>void checkLiveProgress(c)}>Live status</button>}
+                  {liveHistory[c.id] && <small role="status">{liveHistory[c.id]}</small>}
                   {openHistory===c.id && <div role="region" aria-label={c.name+' mock delivery history'} style={{maxHeight:260,overflow:'auto',minWidth:250}}>
                     {(mockHistory[c.id]||[]).map(h=><div key={h.contactId} style={{borderBottom:'1px solid #ddd',padding:'6px 0',fontSize:12}}>
                       <strong>{h.status}</strong> · Contact {h.contactId.slice(0,8)} · Attempts {h.attempts}
