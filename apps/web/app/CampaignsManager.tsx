@@ -95,6 +95,26 @@ export default function CampaignsManager({ token }: { token: string }) {
       setMockProgress(p=>({...p,[id]:'MOCK_SENT '+(c.MOCK_SENT||0)+'/'+r.total+' | Active '+(c.active||0)+' | Failed '+(c.failed||0)}));
     } catch(e) { setError(e instanceof Error ? e.message : 'Progress check failed'); }
   }
+  async function retryMock(c:Campaign) {
+    setSaving(true); setError(''); setMessage('');
+    try {
+      const result=await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/mock-retry',{method:'POST'});
+      setMessage('Retried '+result.retried+' failed mock job(s)');
+      await load(); await checkMock(c.id);
+    } catch(e) { setError(e instanceof Error ? e.message : 'Retry failed'); }
+    finally { setSaving(false); }
+  }
+  useEffect(() => {
+    if (!mockEnabled || !campaigns.some(c => c.status === 'QUEUED')) return;
+    let cancelled=false;
+    const refresh=async () => {
+      const queued=campaigns.filter(c=>c.status==='QUEUED');
+      await Promise.all(queued.map(c=>checkMock(c.id)));
+      if (!cancelled) await load();
+    };
+    const id=setInterval(() => { void refresh(); },3000);
+    return () => {cancelled=true;clearInterval(id);};
+  }, [mockEnabled, campaigns.map(c=>c.id+':'+c.status).join('|')]);
   const filtered = campaigns.filter(c =>
     (filter === 'ALL' || c.status === filter) &&
     (c.name.toLowerCase().includes(search.toLowerCase()) || c.templateName.toLowerCase().includes(search.toLowerCase()))
@@ -217,7 +237,7 @@ export default function CampaignsManager({ token }: { token: string }) {
         <div className="manager-card-heading">
           <div>
             <h2>Saved campaigns</h2>
-            <p>Your drafts stay here until you’re ready.</p>
+            <p>Create drafts, run safe mock tests and review progress.</p>
           </div>
           <span className="campaign-list-count">{campaigns.length}</span>
         </div>
@@ -230,6 +250,10 @@ export default function CampaignsManager({ token }: { token: string }) {
           <select aria-label="Campaign status" className="contact-filter" value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="ALL">All statuses</option>
             <option value="DRAFT">Drafts</option>
+            <option value="QUEUED">Queued</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="PARTIAL">Partial</option>
+            <option value="FAILED">Failed</option>
           </select>
           <button type="button" className="manager-secondary-button campaign-refresh" disabled={loading} onClick={() => void load()}>{loading ? 'Loading…' : 'Refresh'}</button>
         </div>
@@ -253,6 +277,7 @@ export default function CampaignsManager({ token }: { token: string }) {
                     </div>
                   )}
                   {mockEnabled && c.status === 'QUEUED' && <button disabled={saving} onClick={()=>void checkMock(c.id)}>Check Mock Progress</button>}
+                  {mockEnabled && ['FAILED','PARTIAL'].includes(c.status) && <button disabled={saving} onClick={()=>void retryMock(c)}>Retry Failed Mock</button>}
                   {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>}
                 </td>
               </tr>
@@ -267,7 +292,7 @@ export default function CampaignsManager({ token }: { token: string }) {
           )}
           {loading && !campaigns.length && <p className="manager-empty-state">Loading campaigns…</p>}
         </div>
-        <p className="campaign-list-footnote">Audience counts are estimates. No campaign messages are queued or sent.</p>
+        <p className="campaign-list-footnote">Audience counts are estimates. Mock simulation does not send WhatsApp messages.</p>
     </section>
     <p className="manager-compliance-note"><span aria-hidden="true">i</span> Campaign sending is disabled until Meta integration and compliance checks are ready.</p>
   </section>;
