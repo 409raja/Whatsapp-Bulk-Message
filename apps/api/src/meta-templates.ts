@@ -36,3 +36,8 @@ export function metaGraphVersion(version: string | undefined): string {
   if (!/^v\d+\.\d+$/.test(v)) throw new Error('Invalid Meta Graph API version');
   return v;
 }
+
+/** Registration eligibility is distinct from an OTP verification-code expiry. */
+export function isRegisteredCloudApiPhone(data: { status?: unknown; platform_type?: unknown }): boolean {
+  return data.status === 'CONNECTED' && data.platform_type === 'CLOUD_API';
+}
