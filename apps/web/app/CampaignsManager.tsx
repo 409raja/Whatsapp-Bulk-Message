@@ -302,7 +302,7 @@ export default function CampaignsManager({ token }: { token: string }) {
                     </div>)}
                     {(mockHistory[c.id]||[]).length===0 && <small>No history recorded for this campaign</small>}
                   </div>}
-                  {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>
+                  {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>}
                 </td>
               </tr>
             ))}</tbody>
