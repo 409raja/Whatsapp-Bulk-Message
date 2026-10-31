@@ -9,7 +9,12 @@
     "src/mock-lifecycle.test.ts",
     "src/analytics.test.ts",
     "src/meta-templates.ts",
-    "src/meta-templates.test.ts"
+    "src/meta-templates.test.ts",
+    "src/live-pilot.ts",
+    "src/live-worker.ts",
+    "src/live-webhook.ts",
+    "src/webhook.ts",
+    "src/live-webhook.test.ts"
   ],
   "exclude": [
     "node_modules",
