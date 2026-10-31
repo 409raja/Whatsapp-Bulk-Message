@@ -2,9 +2,12 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[] };
+type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[]; connectionId?:string|null;templateLanguage?:string|null;templateComponents?:unknown[] };
 type Contact = { id: string; name: string | null; phone: string };
 type Audience = { eligible: number; optedOut: number; total: number };
+type WhatsAppConnection = {id:string;label:string;displayPhoneNumber:string|null;status:string};
+type ApprovedTemplate = {id:string;name:string;language:string;category:string;parameterized:boolean};
+type MockAnalytics = {mode:string;campaigns:{total:number;completed:number;partial:number;failed:number;queued:number};deliveries:{mockSent:number;failed:number;skipped:number;queued:number;active:number}};
 const input: CSSProperties = { padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, width: '100%', boxSizing: 'border-box' };
 
 export default function CampaignsManager({ token }: { token: string }) {
@@ -15,6 +18,15 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [audience, setAudience] = useState<Audience | null>(null);
   const [name, setName] = useState('');
   const [templateName, setTemplateName] = useState('');
+  const [templateLanguage,setTemplateLanguage]=useState('en_US');
+  const [templateComponents,setTemplateComponents]=useState('[]');
+  const [verification,setVerification]=useState('');
+  const [liveHistory,setLiveHistory]=useState<Record<string,string>>({});
+  const [connections, setConnections] = useState<WhatsAppConnection[]>([]);
+  const [connectionId, setConnectionId] = useState('');
+  const [approvedTemplates, setApprovedTemplates] = useState<ApprovedTemplate[]>([]);
+  const [templateLookupNote, setTemplateLookupNote] = useState('');
+  const [templateLookupLoading, setTemplateLookupLoading] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -23,6 +35,12 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [mockEnabled, setMockEnabled] = useState(false);
+  const [livePilotEnabled,setLivePilotEnabled]=useState(false);
+  const [analytics, setAnalytics] = useState<MockAnalytics|null>(null);
+  const [mockProgress, setMockProgress] = useState<Record<string,string>>({});
+  const [mockHistory, setMockHistory] = useState<Record<string, Array<{contactId:string;status:string;attempts:number;lastError:string|null}>>>({});
+  const [openHistory, setOpenHistory] = useState<string|null>(null);
   const request = useCallback(async (path: string, init?: RequestInit) => {
     const response = await fetch(API + path, { ...init, headers: {
       Authorization: 'Bearer ' + token,
@@ -46,10 +64,57 @@ export default function CampaignsManager({ token }: { token: string }) {
     finally { if (!signal?.aborted) setLoading(false); }
   }, [request]);
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
-  function reset() { setEditing(null); setName(''); setTemplateName(''); setSelected([]); setComposerOpen(false); }
+  useEffect(() => {
+    let cancelled=false;
+    void request('/api/v1/whatsapp/connections').then((items: WhatsAppConnection[]) => {
+      if (!cancelled) setConnections(items);
+    }).catch(() => { if (!cancelled) setConnections([]); });
+    return () => { cancelled=true; };
+  },[request]);
+  async function verifyPhone() {
+    if(!connectionId)return;
+    setVerification('Checking phone with Meta…');
+    try {
+      const x=await request('/api/v1/whatsapp/connections/'+encodeURIComponent(connectionId)+'/verify-phone',{method:'POST'});
+      setVerification(x.verified?'Verified and ACTIVE: '+(x.displayPhoneNumber||'business number'):
+        'Not active: Meta status '+(x.metaStatus||'unknown')+'; verification '+(x.codeVerificationStatus||'unknown'));
+      const items=await request('/api/v1/whatsapp/connections');
+      setConnections(items);
+    }catch(e){setVerification(e instanceof Error?e.message:'Verification failed')}
+  }
+  async function checkLiveProgress(c:Campaign) {
+    try {
+      const x=await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/live-progress');
+      setLiveHistory(prev=>({...prev,[c.id]:(x.deliveries||[]).map((d:any)=>
+        d.status+' · Contact '+String(d.contactId).slice(0,8)+' · Attempts '+d.attempts).join(' | ')||'No live sends'}));
+    }catch(e){setError(e instanceof Error?e.message:'Live history unavailable')}
+  }
+  async function lookUpApprovedTemplates() {
+    if (!connectionId) return;
+    setTemplateLookupLoading(true);
+    setTemplateLookupNote('');
+    setApprovedTemplates([]);
+    try {
+      const data=await request('/api/v1/whatsapp/connections/'+encodeURIComponent(connectionId)+'/approved-templates');
+      setApprovedTemplates(data.templates||[]);
+      setTemplateLookupNote((data.templates||[]).length
+        ? 'Approved templates loaded. '+(data.hasMore ? 'Only first 100 fetched. ' : '')+'Live sending remains disabled.'
+        : 'No approved templates returned for this connection; check WABA, token and permissions.');
+    } catch(e) {
+      setTemplateLookupNote(e instanceof Error?e.message:'Template lookup failed');
+    } finally { setTemplateLookupLoading(false); }
+  }
+  function reset() { setEditing(null); setName(''); setTemplateName(''); setTemplateLanguage('en_US'); setTemplateComponents('[]'); setConnectionId(''); setSelected([]); setComposerOpen(false); }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setError(''); setMessage('');
-    const payload = { name: name.trim(), templateName: templateName.trim(), recipientIds: selected };
+    let parsedComponents:Record<string,unknown>[];
+    try {
+      const value=JSON.parse(templateComponents);
+      if(!Array.isArray(value)||value.length>10||value.some(x=>!x||typeof x!=='object'||Array.isArray(x))) throw Error();
+      parsedComponents=value;
+    } catch {setError('Template components must be a JSON array (e.g. []), maximum 10 objects');return;}
+    const payload = { name: name.trim(), templateName: templateName.trim(), recipientIds: selected,
+      ...(connectionId?{connectionId,templateLanguage,templateComponents:parsedComponents}:{}) };
     if (payload.name.length < 2 || !/^[a-z0-9_]+$/.test(payload.templateName)) {
       setError('Enter a campaign name and a lowercase template identifier (letters, digits, underscores)'); return;
     }
@@ -74,6 +139,80 @@ export default function CampaignsManager({ token }: { token: string }) {
     } catch (e) { setError(e instanceof Error ? e.message : 'Delete failed'); }
     finally { setSaving(false); }
   }
+  useEffect(() => {
+    void request('/api/v1/campaigns/live-mode').then(x=>setLivePilotEnabled(Boolean(x.enabled))).catch(()=>setLivePilotEnabled(false));
+  },[request]);
+  useEffect(() => {
+    void request('/api/v1/campaigns/mock-mode').then(data=>setMockEnabled(Boolean(data.enabled))).catch(()=>setMockEnabled(false));
+  },[request]);
+  async function mockStart(c:Campaign) {
+    setSaving(true); setError(''); setMessage('');
+    try {
+      await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/mock-start',{method:'POST'});
+      setMessage('Mock campaign queued; no real WhatsApp message sent');
+      await load(); await checkMock(c.id);
+    } catch(e) { setError(e instanceof Error ? e.message : 'Mock start failed'); }
+    finally { setSaving(false); }
+  }
+  async function checkMock(id:string) {
+    try {
+      const r=await request('/api/v1/campaigns/'+encodeURIComponent(id)+'/mock-progress');
+      const c=r.counts||{};
+      setMockProgress(p=>({...p,[id]:'MOCK_SENT '+(c.MOCK_SENT||0)+'/'+r.total+' | Active '+(c.active||0)+' | Failed '+(c.failed||0)}));
+    } catch(e) { setError(e instanceof Error ? e.message : 'Progress check failed'); }
+  }
+  const refreshAnalytics = useCallback(async () => {
+    try {
+      const data=await request('/api/v1/campaigns/mock-analytics');
+      if (data?.mode==='MOCK_ONLY') setAnalytics(data);
+    } catch { setAnalytics(null); }
+  },[request]);
+  useEffect(() => { if (mockEnabled) void refreshAnalytics(); },[mockEnabled, refreshAnalytics, campaigns.map(c=>c.id+':'+c.status).join('|')]);
+  async function historyMock(c:Campaign) {
+    if (openHistory===c.id) { setOpenHistory(null);return; }
+    setError('');
+    try {
+      const result=await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/mock-history');
+      setMockHistory(prev=>({...prev,[c.id]:result.history||[]}));
+      setOpenHistory(c.id);
+    } catch(e) {setError(e instanceof Error?e.message:'History unavailable');}
+  }
+  async function startPilot(c:Campaign){
+    if(!livePilotEnabled||!c.connectionId)return;
+    if(!window.confirm('Send REAL approved template to '+(c.recipientIds?.length||0)+' opted-in contacts? This is billable and cannot be undone.'))return;
+    setSaving(true);setError('');
+    try{
+      await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/live-pilot-start',{method:'POST'});
+      setMessage('Live pilot queued. Meta acceptance is NOT delivery confirmation.');
+      await load();await checkLiveProgress(c);
+    }catch(e){setError(e instanceof Error?e.message:'Live pilot unavailable')}
+    finally{setSaving(false)}
+  }
+  async function retryMock(c:Campaign) {
+    setSaving(true); setError(''); setMessage('');
+    try {
+      const result=await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/mock-retry',{method:'POST'});
+      setMessage('Retried '+result.retried+' failed mock job(s)');
+      await load(); await checkMock(c.id);
+    } catch(e) { setError(e instanceof Error ? e.message : 'Retry failed'); }
+    finally { setSaving(false); }
+  }
+  useEffect(() => {
+    if (!mockEnabled || !campaigns.some(c => c.status === 'QUEUED')) return;
+    let cancelled=false;
+    let busy=false;
+    const refresh=async () => {
+      if (busy || cancelled) return;
+      busy=true;
+      try {
+        const queued=campaigns.filter(c=>c.status==='QUEUED');
+        await Promise.all(queued.map(c=>checkMock(c.id)));
+        if (!cancelled) await load();
+      } finally { busy=false; }
+    };
+    const id=setInterval(() => { void refresh(); },3000);
+    return () => {cancelled=true;clearInterval(id);};
+  }, [mockEnabled, campaigns.map(c=>c.id+':'+c.status).join('|')]);
   const filtered = campaigns.filter(c =>
     (filter === 'ALL' || c.status === filter) &&
     (c.name.toLowerCase().includes(search.toLowerCase()) || c.templateName.toLowerCase().includes(search.toLowerCase()))
@@ -96,6 +235,14 @@ export default function CampaignsManager({ token }: { token: string }) {
     {error && <p className="manager-feedback manager-feedback-error" role="alert">{error}</p>}
     {message && <p className="manager-feedback manager-feedback-success" role="status">{message}</p>}
 
+    {mockEnabled && analytics && (
+      <div className="campaign-stats" aria-label="Mock-only analytics">
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Simulated messages</small><strong>{analytics.deliveries.mockSent}</strong></span></div>
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Failed mock attempts</small><strong>{analytics.deliveries.failed}</strong></span></div>
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Completed mock campaigns</small><strong>{analytics.campaigns.completed}</strong></span></div>
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Partial / failed campaigns</small><strong>{analytics.campaigns.partial+analytics.campaigns.failed}</strong></span></div>
+      </div>
+    )}
     <div className="campaign-stats">
       <div className="manager-metric-card">
         <span className="manager-metric-icon metric-icon-violet" aria-hidden="true">▤</span>
@@ -134,9 +281,38 @@ export default function CampaignsManager({ token }: { token: string }) {
             <input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Customer updates" minLength={2} maxLength={120} required />
           </label>
           <label className="manager-field">
-            WhatsApp template
+            WhatsApp business connection (read-only lookup)
+            <select style={input} value={connectionId} onChange={e=>{setConnectionId(e.target.value);setApprovedTemplates([]);setTemplateLookupNote('');}}>
+              <option value="">Choose connected number</option>
+              {connections.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayPhoneNumber||'Number pending'} ({c.status})</option>)}
+            </select>
+          </label>
+          <div>
+            <button type="button" className="manager-secondary-button" disabled={!connectionId||templateLookupLoading}
+              onClick={()=>void lookUpApprovedTemplates()}>{templateLookupLoading?'Checking Meta…':'Load approved templates'}</button>
+            <button type="button" className="manager-secondary-button" disabled={!connectionId}
+              onClick={()=>void verifyPhone()}>Verify phone status</button>
+            {verification&&<p role="status" className="manager-field-hint">{verification}</p>}
+            {templateLookupNote && <p role="status" className="manager-field-hint">{templateLookupNote}</p>}
+            {approvedTemplates.length>0 && <label className="manager-field">
+              Approved Meta template
+              <select style={input} value="" onChange={e=>{const t=approvedTemplates.find(x=>x.id===e.target.value);if(t){setTemplateName(t.name);setTemplateLanguage(t.language);}}}>
+                <option value="">Select a template for this draft</option>
+                {approvedTemplates.map(t=><option key={t.id} value={t.id}>{t.name} ({t.language}, {t.category}{t.parameterized?', variables required':''})</option>)}
+              </select>
+            </label>}
+          </div>
+          <label className="manager-field">
+            WhatsApp template identifier
             <input style={input} value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="e.g. customer_update" maxLength={120} required />
-            <span className="manager-field-hint">Use the template identifier approved in Meta.</span>
+            <span className="manager-field-hint">Select your approved template and matching language. Live pilot is separately gated.</span>
+          </label>
+          <label className="manager-field">Template language
+            <input style={input} value={templateLanguage} onChange={e=>setTemplateLanguage(e.target.value)} placeholder="en_US" />
+          </label>
+          <label className="manager-field">Template component JSON (advanced; leave [] for no variables)
+            <textarea style={input} rows={3} value={templateComponents} onChange={e=>setTemplateComponents(e.target.value)} />
+            <span className="manager-field-hint">Use Meta's template components schema. Do not include secrets. Variable templates require correct component mapping.</span>
           </label>
         </div>
 
@@ -196,7 +372,7 @@ export default function CampaignsManager({ token }: { token: string }) {
         <div className="manager-card-heading">
           <div>
             <h2>Saved campaigns</h2>
-            <p>Your drafts stay here until you’re ready.</p>
+            <p>Create drafts, run safe mock tests and review progress.</p>
           </div>
           <span className="campaign-list-count">{campaigns.length}</span>
         </div>
@@ -209,6 +385,10 @@ export default function CampaignsManager({ token }: { token: string }) {
           <select aria-label="Campaign status" className="contact-filter" value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="ALL">All statuses</option>
             <option value="DRAFT">Drafts</option>
+            <option value="QUEUED">Queued</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="PARTIAL">Partial</option>
+            <option value="FAILED">Failed</option>
           </select>
           <button type="button" className="manager-secondary-button campaign-refresh" disabled={loading} onClick={() => void load()}>{loading ? 'Loading…' : 'Refresh'}</button>
         </div>
@@ -226,10 +406,26 @@ export default function CampaignsManager({ token }: { token: string }) {
                 <td>
                   {c.status === 'DRAFT' && (
                     <div className="campaign-list-actions">
-                      <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
+                      <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setConnectionId(c.connectionId||'');setTemplateLanguage(c.templateLanguage||'en_US');setTemplateComponents(JSON.stringify(c.templateComponents||[])); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
+                      {mockEnabled && <button disabled={saving} onClick={() => void mockStart(c)}>Start Mock</button>}
+                      {livePilotEnabled && Boolean(c.connectionId) && (c.recipientIds?.length||0)<=2 &&
+                        <button disabled={saving} onClick={()=>void startPilot(c)}>Start REAL pilot (1–2)</button>}
                       <button aria-label={`Delete ${c.name}`} disabled={saving} onClick={() => void remove(c)}>Delete</button>
                     </div>
                   )}
+                  {mockEnabled && c.status === 'QUEUED' && <button disabled={saving} onClick={()=>void checkMock(c.id)}>Check Mock Progress</button>}
+                  {mockEnabled && ['FAILED','PARTIAL'].includes(c.status) && <button disabled={saving} onClick={()=>void retryMock(c)}>Retry Failed Mock</button>}
+                  {mockEnabled && c.status !== 'DRAFT' && <button disabled={saving} onClick={()=>void historyMock(c)}>{openHistory===c.id?'Hide History':'Mock History'}</button>}
+                  {c.connectionId && c.status !== 'DRAFT' && <button disabled={saving} onClick={()=>void checkLiveProgress(c)}>Live status</button>}
+                  {liveHistory[c.id] && <small role="status">{liveHistory[c.id]}</small>}
+                  {openHistory===c.id && <div role="region" aria-label={c.name+' mock delivery history'} style={{maxHeight:260,overflow:'auto',minWidth:250}}>
+                    {(mockHistory[c.id]||[]).map(h=><div key={h.contactId} style={{borderBottom:'1px solid #ddd',padding:'6px 0',fontSize:12}}>
+                      <strong>{h.status}</strong> · Contact {h.contactId.slice(0,8)} · Attempts {h.attempts}
+                      {h.lastError && <div role="alert">{h.lastError}</div>}
+                    </div>)}
+                    {(mockHistory[c.id]||[]).length===0 && <small>No history recorded for this campaign</small>}
+                  </div>}
+                  {mockProgress[c.id] && <small role="status">{mockProgress[c.id]}</small>}
                 </td>
               </tr>
             ))}</tbody>
@@ -243,7 +439,7 @@ export default function CampaignsManager({ token }: { token: string }) {
           )}
           {loading && !campaigns.length && <p className="manager-empty-state">Loading campaigns…</p>}
         </div>
-        <p className="campaign-list-footnote">Audience counts are estimates. No campaign messages are queued or sent.</p>
+        <p className="campaign-list-footnote">Audience counts are estimates. Mock simulation does not send WhatsApp messages.</p>
     </section>
     <p className="manager-compliance-note"><span aria-hidden="true">i</span> Campaign sending is disabled until Meta integration and compliance checks are ready.</p>
   </section>;

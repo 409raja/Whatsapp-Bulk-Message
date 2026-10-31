@@ -8,6 +8,12 @@ import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
+import { enqueueCampaign, getMockCampaignProgress, getMockDeliveryHistory, retryFailedMockCampaign } from './queue';
+import { aggregateMockStats } from './mock-analytics';
+import { liveEnabled, startLivePilot, liveProgress } from './live-pilot';
+import { liveWebhookGet, liveWebhookPost } from './live-webhook';
+import { decryptToken } from './encryption';
+import { normalizeApprovedTemplates, metaGraphVersion } from './meta-templates';
 
 
 const db = new PrismaClient();
@@ -21,6 +27,9 @@ app.use(
   })
 );
 
+// Register isolated callback before JSON parsing, to verify the exact signed bytes.
+app.get('/api/v1/standalone/meta-webhook', liveWebhookGet);
+app.post('/api/v1/standalone/meta-webhook', express.raw({type:'application/json',limit:'256kb'}), liveWebhookPost);
 app.use(express.json({ limit: '1mb' }));
 
 const secret = process.env.JWT_SECRET;
@@ -304,6 +313,74 @@ app.get(
   })
 );
 
+// Read-only template discovery. Never send credentials to the browser or enable live sends.
+app.get('/api/v1/whatsapp/connections/:id/approved-templates', auth, requireWhatsAppAdmin,
+  handler(async (req: any, res: any) => {
+    const conn = await db.whatsAppConnection.findFirst({
+      where: { id: req.params.id, tenantId: req.user.tenantId },
+      select: { id: true, label: true, wabaId: true, status: true, accessTokenEncrypted: true },
+    });
+    if (!conn) return res.status(404).json({ error: 'Connection not found for this company' });
+    if (!conn.accessTokenEncrypted) return res.status(409).json({ error: 'Connection requires reauthorization' });
+    let token: string;
+    try { token = decryptToken(conn.accessTokenEncrypted); }
+    catch { return res.status(409).json({ error: 'Connection credentials unavailable; reauthorize securely' }); }
+    const version = metaGraphVersion(process.env.META_GRAPH_VERSION);
+    const url = new URL('https://graph.facebook.com/' + version + '/' + encodeURIComponent(conn.wabaId) + '/message_templates');
+    url.searchParams.set('fields', 'id,name,status,language,category,components');
+    url.searchParams.set('limit', '100');
+    // The initial page is deliberately bounded; no automatic untrusted pagination.
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: 'Bearer ' + token },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) return res.status(502).json({
+        error: 'Meta template lookup failed; check connection permissions and authorization',
+      });
+      const body: any = await response.json();
+      if (!Array.isArray(body.data)) return res.status(502).json({ error: 'Invalid Meta template response' });
+      const templates = normalizeApprovedTemplates(body.data);
+      return res.json({
+        connection: { id: conn.id, label: conn.label, status: conn.status },
+        templates, hasMore: Boolean(body.paging?.next),
+        liveSendingEnabled: false,
+        note: 'Read-only approved template discovery. Campaigns remain mock-only.',
+      });
+    } catch {
+      return res.status(502).json({ error: 'Meta template lookup temporarily unavailable' });
+    }
+  })
+);
+
+// Verify a specific company's Meta phone before allowing activation.
+app.post('/api/v1/whatsapp/connections/:id/verify-phone', auth, requireWhatsAppAdmin,
+ handler(async(req:any,res:any)=>{
+  const conn=await db.whatsAppConnection.findFirst({where:{id:req.params.id,tenantId:req.user.tenantId}});
+  if(!conn)return res.status(404).json({error:'Connection not found'});
+  if(!conn.accessTokenEncrypted)return res.status(409).json({error:'Connection token missing'});
+  let token:string;
+  try{token=decryptToken(conn.accessTokenEncrypted)}
+  catch{return res.status(409).json({error:'Unable to decrypt connection token'})}
+  const version=metaGraphVersion(process.env.META_GRAPH_VERSION);
+  const url=new URL('https://graph.facebook.com/'+version+'/'+encodeURIComponent(conn.phoneNumberId));
+  url.searchParams.set('fields','id,display_phone_number,verified_name,quality_rating,code_verification_status,status,platform_type');
+  try{
+   const response=await fetch(url,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(15000)});
+   if(!response.ok)return res.status(502).json({error:'Meta phone verification failed; review token permissions'});
+   const data:any=await response.json();
+   if(String(data.id)!==conn.phoneNumberId)return res.status(409).json({error:'Meta phone mismatch'});
+   const connected=data.status==='CONNECTED' && data.code_verification_status==='VERIFIED'
+      && data.platform_type==='CLOUD_API';
+   // Activation is only based on live Meta response, never user-supplied status.
+   await db.whatsAppConnection.updateMany({where:{id:conn.id,tenantId:req.user.tenantId},
+    data:{status:connected?'ACTIVE':'PENDING'}});
+   return res.json({connectionId:conn.id,verified:connected,metaStatus:data.status||null,
+    codeVerificationStatus:data.code_verification_status||null,platformType:data.platform_type||null,
+    qualityRating:data.quality_rating||null,displayPhoneNumber:data.display_phone_number||null});
+  }catch{return res.status(502).json({error:'Meta phone verification temporarily unavailable'})}
+ }));
+ 
 // Contacts: tenant-scoped search, pagination and safe consent handling
 app.get('/api/v1/contacts', auth, handler(async (req: any, res: any) => {
   const query = z.object({
@@ -430,6 +507,9 @@ const campaignDraftSchema = z.object({
   recipientIds: z.array(z.string().min(1)).min(1).max(500),
   name: z.string().trim().min(2).max(120),
   templateName: z.string().trim().min(1).max(120).regex(/^[a-z0-9_]+$/, 'Use lowercase letters, numbers and underscores'),
+  connectionId: z.string().min(1).optional(),
+  templateLanguage: z.string().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/).optional(),
+  templateComponents: z.array(z.record(z.unknown())).max(10).optional(),
 }).strict();
 
 app.post('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
@@ -440,9 +520,15 @@ app.post('/api/v1/campaigns', auth, handler(async (req: any, res: any) => {
     const count = await db.contact.count({ where: { tenantId: req.user.tenantId, id: { in: recipientIds }, consent: true } });
     if (count !== recipientIds.length) return res.status(400).json({ error: 'Select only opted-in contacts from your company' });
   }
+  if(parsed.data.connectionId){
+    const conn=await db.whatsAppConnection.findFirst({where:{id:parsed.data.connectionId,tenantId:req.user.tenantId}});
+    if(!conn)return res.status(400).json({error:'Connection does not belong to this company'});
+    if(!parsed.data.templateLanguage)return res.status(400).json({error:'Template language required'});
+  }
   const campaign = await db.campaign.create({ data: {
     tenantId: req.user.tenantId, name: parsed.data.name, templateName: parsed.data.templateName,
-    recipientIds, status: 'DRAFT',
+    connectionId:parsed.data.connectionId||null,templateLanguage:parsed.data.templateLanguage||null,
+    templateComponents:parsed.data.templateComponents||[],recipientIds, status: 'DRAFT',
   } });
   return res.status(201).json(campaign);
 }));
@@ -455,9 +541,16 @@ app.patch('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => {
     const count = await db.contact.count({ where: { tenantId: req.user.tenantId, id: { in: recipientIds }, consent: true } });
     if (count !== recipientIds.length) return res.status(400).json({ error: 'Select only opted-in contacts from your company' });
   }
+  if(parsed.data.connectionId){
+    const conn=await db.whatsAppConnection.findFirst({where:{id:parsed.data.connectionId,tenantId:req.user.tenantId}});
+    if(!conn)return res.status(400).json({error:'Connection does not belong to this company'});
+    if(!parsed.data.templateLanguage)return res.status(400).json({error:'Template language required'});
+  }
   const updated = await db.campaign.updateMany({
     where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' },
-    data: { name: parsed.data.name, templateName: parsed.data.templateName, recipientIds },
+    data: { name: parsed.data.name, templateName: parsed.data.templateName, recipientIds,
+      connectionId:parsed.data.connectionId||null,templateLanguage:parsed.data.templateLanguage||null,
+      templateComponents:parsed.data.templateComponents||[] },
   });
   if (!updated.count) return res.status(404).json({ error: 'Editable draft not found' });
   return res.json(await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } }));
@@ -469,6 +562,60 @@ app.delete('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => 
   });
   if (!deleted.count) return res.status(404).json({ error: 'Deletable draft not found' });
   return res.json({ deleted: true });
+}));
+
+// Standalone local mock-only API. Live Meta sending is never enabled here.
+const mockEnabled = () => process.env.SEND_MODE === 'mock' && process.env.META_CAMPAIGN_SEND_ENABLED !== 'true';
+app.get('/api/v1/campaigns/mock-mode', auth, requireWhatsAppAdmin, (_req, res) => {
+  res.json({ enabled: mockEnabled() });
+});
+app.post('/api/v1/campaigns/:id/mock-start', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const campaign = await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' } });
+  if (!campaign) return res.status(404).json({ error: 'Draft campaign not found' });
+  const result = await enqueueCampaign(campaign.id, req.user.tenantId);
+  return res.status(202).json({ ...result, mode: 'mock' });
+}));
+app.get('/api/v1/campaigns/:id/mock-progress', auth, requireWhatsAppAdmin, handler(async(req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const campaign = await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } });
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  return res.json(await getMockCampaignProgress(campaign.id, req.user.tenantId));
+}));
+// Tenant-scoped mock analytics. These are simulations, not WhatsApp delivery receipts.
+app.get('/api/v1/campaigns/mock-analytics', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const tenantId = req.user.tenantId;
+  const [campaigns, grouped] = await db.$transaction([
+    db.campaign.groupBy({ by: ['status'], where: { tenantId }, orderBy: { status: 'asc' }, _count: { _all: true } }),
+    db.mockCampaignDelivery.groupBy({ by: ['status'], where: { tenantId }, orderBy: { status: 'asc' }, _count: { _all: true } }),
+  ]);
+  return res.json(aggregateMockStats(campaigns, grouped));
+}));
+
+app.get('/api/v1/campaigns/:id/mock-history', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const history = await getMockDeliveryHistory(req.params.id, req.user.tenantId);
+  return res.json({ history });
+}));
+app.post('/api/v1/campaigns/:id/mock-retry', auth, requireWhatsAppAdmin, handler(async(req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  try {
+    return res.status(202).json(await retryFailedMockCampaign(req.params.id, req.user.tenantId));
+  } catch(error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : 'Retry failed' });
+  }
+}));
+
+// Live sending requires explicit pilot flags. Normal campaign start remains disabled.
+app.get('/api/v1/campaigns/live-mode',auth,requireWhatsAppAdmin,(_req,res)=>res.json({enabled:liveEnabled(),maxRecipients:2}));
+app.get('/api/v1/campaigns/:id/live-progress',auth,requireWhatsAppAdmin,handler(async(req:any,res:any)=>{
+ return res.json(await liveProgress(req.params.id,req.user.tenantId));
+}));
+app.post('/api/v1/campaigns/:id/live-pilot-start',auth,requireWhatsAppAdmin,handler(async(req:any,res:any)=>{
+ if(!liveEnabled())return res.status(403).json({error:'Live pilot feature disabled'});
+ try{return res.status(202).json(await startLivePilot(req.params.id,req.user.tenantId))}
+ catch(err){return res.status(409).json({error:err instanceof Error?err.message:'Live pilot not available'})}
 }));
 
 // Do not enable sending without approved templates, audience selection,
