@@ -38,6 +38,6 @@ export function metaGraphVersion(version: string | undefined): string {
 }
 
 /** Registration eligibility is distinct from an OTP verification-code expiry. */
-export function isRegisteredCloudApiPhone(data: { status?: unknown; platform_type?: unknown }): boolean {
+export function isRegisteredCloudApiPhone(data: { status?: unknown; platform_type?: unknown; code_verification_status?: unknown }): boolean {
   return data.status === 'CONNECTED' && data.platform_type === 'CLOUD_API';
 }
