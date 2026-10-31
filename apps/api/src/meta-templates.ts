@@ -18,8 +18,8 @@ export function normalizeApprovedTemplates(data: unknown): TemplateSummary[] {
     // Flag variable templates: draft UI cannot safely build components yet.
     const components: any[] = Array.isArray(t.components) ? t.components : [];
     const parameterized = components.some((c: any) =>
-      typeof c?.text === 'string' && /{{\\s*\\d+\\s*}}/.test(c.text) ||
-      Array.isArray(c?.buttons) && c.buttons.some((b:any) => typeof b?.text==='string' && /{{\\s*\\d+\\s*}}/.test(b.text))
+      typeof c?.text === 'string' && /{{\s*\d+\s*}}/.test(c.text) ||
+      Array.isArray(c?.buttons) && c.buttons.some((b:any) => typeof b?.text==='string' && /{{\s*\d+\s*}}/.test(b.text))
     );
     return [{
       id: String(t.id || ''),
@@ -33,6 +33,6 @@ export function normalizeApprovedTemplates(data: unknown): TemplateSummary[] {
 }
 export function metaGraphVersion(version: string | undefined): string {
   const v=version || 'v23.0';
-  if (!/^v\\d+\\.\\d+$/.test(v)) throw new Error('Invalid Meta Graph API version');
+  if (!/^v\d+\.\d+$/.test(v)) throw new Error('Invalid Meta Graph API version');
   return v;
 }
