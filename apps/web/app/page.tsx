@@ -317,7 +317,7 @@ export default function Home() {
 
           <div className="saas-sidebar-footer">
             <span className="saas-footer-status"><span /> Workspace protected</span>
-            <p>Campaign sending is currently disabled.</p>
+            <p>{livePilotMode.enabled?'Restricted live pilot enabled.':'Real campaign sending is currently disabled.'}</p>
           </div>
         </aside>
 
