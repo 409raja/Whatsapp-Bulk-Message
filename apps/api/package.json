@@ -6,7 +6,8 @@
     "start": "tsx src/index.ts",
     "test": "vitest run",
     "dev:worker": "tsx src/worker.ts",
-    "test:mock-load": "tsx src/mock-load-benchmark.ts"
+    "test:mock-load": "tsx src/mock-load-benchmark.ts",
+    "typecheck:mock": "tsc --noEmit -p tsconfig.mock.json"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
