@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
 import { enqueueCampaign, getMockCampaignProgress, getMockDeliveryHistory, retryFailedMockCampaign } from './queue';
+import { aggregateMockStats } from './mock-analytics';
 
 
 const db = new PrismaClient();
@@ -498,25 +499,7 @@ app.get('/api/v1/campaigns/mock-analytics', auth, requireWhatsAppAdmin, handler(
     db.campaign.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
     db.mockCampaignDelivery.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
   ]);
-  const sum = (rows: Array<{ status: string; _count: { _all: number } }>, status: string) =>
-    rows.find(row => row.status === status)?._count._all || 0;
-  return res.json({
-    mode: 'MOCK_ONLY',
-    campaigns: {
-      total: campaigns.reduce((n: number, row: any) => n + row._count._all, 0),
-      completed: sum(campaigns, 'COMPLETED'),
-      partial: sum(campaigns, 'PARTIAL'),
-      failed: sum(campaigns, 'FAILED'),
-      queued: sum(campaigns, 'QUEUED'),
-    },
-    deliveries: {
-      mockSent: sum(grouped, 'MOCK_SENT'),
-      failed: sum(grouped, 'FAILED'),
-      skipped: sum(grouped, 'SKIPPED'),
-      queued: sum(grouped, 'QUEUED'),
-      active: sum(grouped, 'ACTIVE'),
-    },
-  });
+  return res.json(aggregateMockStats(campaigns, grouped));
 }));
 
 app.get('/api/v1/campaigns/:id/mock-history', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
