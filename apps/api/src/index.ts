@@ -13,7 +13,7 @@ import { aggregateMockStats } from './mock-analytics';
 import { liveEnabled, startLivePilot, liveProgress } from './live-pilot';
 import { liveWebhookGet, liveWebhookPost } from './live-webhook';
 import { decryptToken } from './encryption';
-import { normalizeApprovedTemplates, metaGraphVersion } from './meta-templates';
+import { normalizeApprovedTemplates, metaGraphVersion, isRegisteredCloudApiPhone } from './meta-templates';
 
 
 const db = new PrismaClient();
@@ -375,7 +375,7 @@ app.post('/api/v1/whatsapp/connections/:id/verify-phone', auth, requireWhatsAppA
    // code_verification_status tracks the separate OTP code's lifetime;
    // an expired past OTP must not override an already CONNECTED Cloud API number.
    // Still require explicit CLOUD_API platform; never activate an ambiguous platform.
-   const connected=data.status==='CONNECTED' && data.platform_type==='CLOUD_API';
+   const connected=isRegisteredCloudApiPhone(data);
    // Activation is only based on live Meta response, never user-supplied status.
    await db.whatsAppConnection.updateMany({where:{id:conn.id,tenantId:req.user.tenantId},
     data:{status:connected?'ACTIVE':'PENDING'}});
