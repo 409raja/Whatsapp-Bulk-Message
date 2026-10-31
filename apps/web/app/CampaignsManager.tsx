@@ -5,6 +5,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 type Campaign = { id: string; name: string; templateName: string; status: string; createdAt: string; recipientIds?: string[] };
 type Contact = { id: string; name: string | null; phone: string };
 type Audience = { eligible: number; optedOut: number; total: number };
+type MockAnalytics = {mode:string;campaigns:{total:number;completed:number;partial:number;failed:number;queued:number};deliveries:{mockSent:number;failed:number;skipped:number;queued:number;active:number}};
 const input: CSSProperties = { padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, width: '100%', boxSizing: 'border-box' };
 
 export default function CampaignsManager({ token }: { token: string }) {
@@ -24,6 +25,7 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [mockEnabled, setMockEnabled] = useState(false);
+  const [analytics, setAnalytics] = useState<MockAnalytics|null>(null);
   const [mockProgress, setMockProgress] = useState<Record<string,string>>({});
   const [mockHistory, setMockHistory] = useState<Record<string, Array<{contactId:string;status:string;attempts:number;lastError:string|null}>>>({});
   const [openHistory, setOpenHistory] = useState<string|null>(null);
@@ -97,6 +99,13 @@ export default function CampaignsManager({ token }: { token: string }) {
       setMockProgress(p=>({...p,[id]:'MOCK_SENT '+(c.MOCK_SENT||0)+'/'+r.total+' | Active '+(c.active||0)+' | Failed '+(c.failed||0)}));
     } catch(e) { setError(e instanceof Error ? e.message : 'Progress check failed'); }
   }
+  const refreshAnalytics = useCallback(async () => {
+    try {
+      const data=await request('/api/v1/campaigns/mock-analytics');
+      if (data?.mode==='MOCK_ONLY') setAnalytics(data);
+    } catch { setAnalytics(null); }
+  },[request]);
+  useEffect(() => { if (mockEnabled) void refreshAnalytics(); },[mockEnabled, refreshAnalytics, campaigns.map(c=>c.id+':'+c.status).join('|')]);
   async function historyMock(c:Campaign) {
     if (openHistory===c.id) { setOpenHistory(null);return; }
     setError('');
@@ -153,6 +162,14 @@ export default function CampaignsManager({ token }: { token: string }) {
     {error && <p className="manager-feedback manager-feedback-error" role="alert">{error}</p>}
     {message && <p className="manager-feedback manager-feedback-success" role="status">{message}</p>}
 
+    {mockEnabled && analytics && (
+      <div className="campaign-stats" aria-label="Mock-only analytics">
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Simulated messages</small><strong>{analytics.deliveries.mockSent}</strong></span></div>
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Failed mock attempts</small><strong>{analytics.deliveries.failed}</strong></span></div>
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Completed mock campaigns</small><strong>{analytics.campaigns.completed}</strong></span></div>
+        <div className="manager-metric-card"><span className="manager-metric-copy"><small>Partial / failed campaigns</small><strong>{analytics.campaigns.partial+analytics.campaigns.failed}</strong></span></div>
+      </div>
+    )}
     <div className="campaign-stats">
       <div className="manager-metric-card">
         <span className="manager-metric-icon metric-icon-violet" aria-hidden="true">▤</span>
