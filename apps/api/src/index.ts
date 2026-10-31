@@ -10,6 +10,8 @@ import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
 import { enqueueCampaign, getMockCampaignProgress, getMockDeliveryHistory, retryFailedMockCampaign } from './queue';
 import { aggregateMockStats } from './mock-analytics';
+import { decryptToken } from './encryption';
+import { normalizeApprovedTemplates, metaGraphVersion } from './meta-templates';
 
 
 const db = new PrismaClient();
@@ -303,6 +305,46 @@ app.get(
     });
 
     return res.json(connections);
+  })
+);
+
+// Read-only template discovery. Never send credentials to the browser or enable live sends.
+app.get('/api/v1/whatsapp/connections/:id/approved-templates', auth, requireWhatsAppAdmin,
+  handler(async (req: any, res: any) => {
+    const conn = await db.whatsAppConnection.findFirst({
+      where: { id: req.params.id, tenantId: req.user.tenantId },
+      select: { id: true, label: true, wabaId: true, status: true, accessTokenEncrypted: true },
+    });
+    if (!conn) return res.status(404).json({ error: 'Connection not found for this company' });
+    if (!conn.accessTokenEncrypted) return res.status(409).json({ error: 'Connection requires reauthorization' });
+    let token: string;
+    try { token = decryptToken(conn.accessTokenEncrypted); }
+    catch { return res.status(409).json({ error: 'Connection credentials unavailable; reauthorize securely' }); }
+    const version = metaGraphVersion(process.env.META_GRAPH_VERSION);
+    const url = new URL('https://graph.facebook.com/' + version + '/' + encodeURIComponent(conn.wabaId) + '/message_templates');
+    url.searchParams.set('fields', 'id,name,status,language,category,components');
+    url.searchParams.set('limit', '100');
+    // The initial page is deliberately bounded; no automatic untrusted pagination.
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: 'Bearer ' + token },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) return res.status(502).json({
+        error: 'Meta template lookup failed; check connection permissions and authorization',
+      });
+      const body: any = await response.json();
+      if (!Array.isArray(body.data)) return res.status(502).json({ error: 'Invalid Meta template response' });
+      const templates = normalizeApprovedTemplates(body.data);
+      return res.json({
+        connection: { id: conn.id, label: conn.label, status: conn.status },
+        templates, hasMore: Boolean(body.paging?.next),
+        liveSendingEnabled: false,
+        note: 'Read-only approved template discovery. Campaigns remain mock-only.',
+      });
+    } catch {
+      return res.status(502).json({ error: 'Meta template lookup temporarily unavailable' });
+    }
   })
 );
 
