@@ -29,7 +29,8 @@ app.use(
 
 // Register isolated callback before JSON parsing, to verify the exact signed bytes.
 app.get('/api/v1/standalone/meta-webhook', liveWebhookGet);
-app.post('/api/v1/standalone/meta-webhook', express.raw({type:'application/json',limit:'256kb'}), liveWebhookPost);
+app.post('/api/v1/standalone/meta-webhook', express.raw({type:'application/json',limit:'256kb'}),
+  (req,res,next)=>{void Promise.resolve(liveWebhookPost(req,res)).catch(next)});
 app.use(express.json({ limit: '1mb' }));
 
 const secret = process.env.JWT_SECRET;
