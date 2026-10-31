@@ -608,6 +608,7 @@ app.post('/api/v1/campaigns/:id/mock-retry', auth, requireWhatsAppAdmin, handler
 }));
 
 // Live sending requires explicit pilot flags. Normal campaign start remains disabled.
+app.get('/api/v1/campaigns/live-mode',auth,requireWhatsAppAdmin,(_req,res)=>res.json({enabled:liveEnabled(),maxRecipients:2}));
 app.get('/api/v1/campaigns/:id/live-progress',auth,requireWhatsAppAdmin,handler(async(req:any,res:any)=>{
  return res.json(await liveProgress(req.params.id,req.user.tenantId));
 }));
