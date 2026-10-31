@@ -15,6 +15,7 @@ model Tenant {
   contacts            Contact[]
   campaigns           Campaign[]
   mockDeliveries      MockCampaignDelivery[]
+  liveDeliveries      LiveCampaignDelivery[]
   whatsappConnections WhatsAppConnection[]
   createdAt           DateTime             @default(now())
 }
@@ -59,6 +60,10 @@ model Campaign {
   status       String   @default("DRAFT")
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
   mockDeliveries MockCampaignDelivery[]
+  liveDeliveries LiveCampaignDelivery[]
+  connectionId String?
+  templateLanguage String?
+  templateComponents Json?
   createdAt    DateTime @default(now())
 }
 
@@ -93,9 +98,31 @@ accessTokenEncrypted String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
+  liveDeliveries LiveCampaignDelivery[]
   @@index([tenantId])
 }
 
+
+model LiveCampaignDelivery {
+  id           String @id @default(cuid())
+  tenantId     String
+  campaignId   String
+  contactId    String
+  connectionId String
+  status       String @default("QUEUED")
+  messageId    String? @unique
+  attempts     Int @default(0)
+  lastError    String?
+  nextAttemptAt DateTime?
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+  campaign     Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  connection   WhatsAppConnection @relation(fields: [connectionId], references: [id])
+  tenant       Tenant @relation(fields: [tenantId], references: [id])
+  @@unique([campaignId, contactId])
+  @@index([tenantId, campaignId, status])
+  @@index([connectionId, status])
+}
 
 model WhatsAppSignupSession {
   id          String    @id @default(cuid())
