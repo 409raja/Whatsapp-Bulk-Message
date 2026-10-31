@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeApprovedTemplates, metaGraphVersion } from './meta-templates';
+import { normalizeApprovedTemplates, metaGraphVersion, isRegisteredCloudApiPhone } from './meta-templates';
 
 describe('Meta approved template discovery', () => {
   it('returns approved metadata without private components', () => {
@@ -16,5 +16,10 @@ describe('Meta approved template discovery', () => {
     expect(normalizeApprovedTemplates(null)).toEqual([]);
     expect(metaGraphVersion('v23.0')).toBe('v23.0');
     expect(()=>metaGraphVersion('https://example.com')).toThrow();
+  });
+  it('does not confuse an expired OTP with an already registered Cloud API phone',()=>{
+    expect(isRegisteredCloudApiPhone({status:'CONNECTED',platform_type:'CLOUD_API',code_verification_status:'EXPIRED'})).toBe(true);
+    expect(isRegisteredCloudApiPhone({status:'CONNECTED',platform_type:'ON_PREMISE'})).toBe(false);
+    expect(isRegisteredCloudApiPhone({status:'PENDING',platform_type:'CLOUD_API'})).toBe(false);
   });
 });
