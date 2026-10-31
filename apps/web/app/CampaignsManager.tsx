@@ -36,6 +36,7 @@ export default function CampaignsManager({ token }: { token: string }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [mockEnabled, setMockEnabled] = useState(false);
+  const [livePilotEnabled,setLivePilotEnabled]=useState(false);
   const [analytics, setAnalytics] = useState<MockAnalytics|null>(null);
   const [mockProgress, setMockProgress] = useState<Record<string,string>>({});
   const [mockHistory, setMockHistory] = useState<Record<string, Array<{contactId:string;status:string;attempts:number;lastError:string|null}>>>({});
@@ -139,6 +140,9 @@ export default function CampaignsManager({ token }: { token: string }) {
     finally { setSaving(false); }
   }
   useEffect(() => {
+    void request('/api/v1/campaigns/live-mode').then(x=>setLivePilotEnabled(Boolean(x.enabled))).catch(()=>setLivePilotEnabled(false));
+  },[request]);
+  useEffect(() => {
     void request('/api/v1/campaigns/mock-mode').then(data=>setMockEnabled(Boolean(data.enabled))).catch(()=>setMockEnabled(false));
   },[request]);
   async function mockStart(c:Campaign) {
@@ -172,6 +176,17 @@ export default function CampaignsManager({ token }: { token: string }) {
       setMockHistory(prev=>({...prev,[c.id]:result.history||[]}));
       setOpenHistory(c.id);
     } catch(e) {setError(e instanceof Error?e.message:'History unavailable');}
+  }
+  async function startPilot(c:Campaign){
+    if(!livePilotEnabled||!c.connectionId)return;
+    if(!window.confirm('Send REAL approved template to '+(c.recipientIds?.length||0)+' opted-in contacts? This is billable and cannot be undone.'))return;
+    setSaving(true);setError('');
+    try{
+      await request('/api/v1/campaigns/'+encodeURIComponent(c.id)+'/live-pilot-start',{method:'POST'});
+      setMessage('Live pilot queued. Meta acceptance is NOT delivery confirmation.');
+      await load();await checkLiveProgress(c);
+    }catch(e){setError(e instanceof Error?e.message:'Live pilot unavailable')}
+    finally{setSaving(false)}
   }
   async function retryMock(c:Campaign) {
     setSaving(true); setError(''); setMessage('');
@@ -393,6 +408,8 @@ export default function CampaignsManager({ token }: { token: string }) {
                     <div className="campaign-list-actions">
                       <button aria-label={`Edit ${c.name}`} disabled={saving} onClick={() => { setEditing(c.id); setName(c.name); setTemplateName(c.templateName); setConnectionId(c.connectionId||'');setTemplateLanguage(c.templateLanguage||'en_US');setTemplateComponents(JSON.stringify(c.templateComponents||[])); setSelected(Array.isArray(c.recipientIds) ? c.recipientIds : []); setComposerOpen(true); }}>Edit</button>
                       {mockEnabled && <button disabled={saving} onClick={() => void mockStart(c)}>Start Mock</button>}
+                      {livePilotEnabled && Boolean(c.connectionId) && (c.recipientIds?.length||0)<=2 &&
+                        <button disabled={saving} onClick={()=>void startPilot(c)}>Start REAL pilot (1–2)</button>}
                       <button aria-label={`Delete ${c.name}`} disabled={saving} onClick={() => void remove(c)}>Delete</button>
                     </div>
                   )}
