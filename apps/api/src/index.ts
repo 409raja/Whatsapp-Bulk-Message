@@ -371,14 +371,20 @@ app.post('/api/v1/whatsapp/connections/:id/verify-phone', auth, requireWhatsAppA
    if(!response.ok)return res.status(502).json({error:'Meta phone verification failed; review token permissions'});
    const data:any=await response.json();
    if(String(data.id)!==conn.phoneNumberId)return res.status(409).json({error:'Meta phone mismatch'});
-   const connected=data.status==='CONNECTED' && data.code_verification_status==='VERIFIED'
-      && data.platform_type==='CLOUD_API';
+   // CONNECTED is Meta's current Cloud API registration state.
+   // code_verification_status tracks the separate OTP code's lifetime;
+   // an expired past OTP must not override an already CONNECTED Cloud API number.
+   // Still require explicit CLOUD_API platform; never activate an ambiguous platform.
+   const connected=data.status==='CONNECTED' && data.platform_type==='CLOUD_API';
    // Activation is only based on live Meta response, never user-supplied status.
    await db.whatsAppConnection.updateMany({where:{id:conn.id,tenantId:req.user.tenantId},
     data:{status:connected?'ACTIVE':'PENDING'}});
    return res.json({connectionId:conn.id,verified:connected,metaStatus:data.status||null,
     codeVerificationStatus:data.code_verification_status||null,platformType:data.platform_type||null,
-    qualityRating:data.quality_rating||null,displayPhoneNumber:data.display_phone_number||null});
+    qualityRating:data.quality_rating||null,displayPhoneNumber:data.display_phone_number||null,
+    note:data.code_verification_status==='EXPIRED' && connected
+      ? 'Earlier verification code expired; phone remains registered according to Meta CONNECTED Cloud API status'
+      : 'Verified against current Meta phone status and platform'});
   }catch{return res.status(502).json({error:'Meta phone verification temporarily unavailable'})}
  }));
  
