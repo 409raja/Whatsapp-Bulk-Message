@@ -17,7 +17,7 @@ describe('Meta webhook safety',()=>{
  it('captures only safe Meta failure code and title for investigation',()=>{
   expect(metaFailureDiagnostic([{code:131026,title:'Message undeliverable',error_data:{details:'private number'}}])).toBe('Meta error 131026: Message undeliverable');
   expect(metaFailureDiagnostic([])).toMatch(/no error details supplied/);
-  expect(metaFailureDiagnostic([{code:130429,title:'Rate limit\\nblocked'}])).toBe('Meta error 130429: Rate limit blocked');
+  expect(metaFailureDiagnostic([{code:130429,title:'Rate limit blocked'}])).toBe('Meta error 130429: Rate limit blocked');
  });
  it('only maps supported delivery states',()=>{
   expect(normalizedDeliveryStatus('delivered')).toBe('DELIVERED');
