@@ -14,6 +14,7 @@ model Tenant {
   memberships         Membership[]
   contacts            Contact[]
   campaigns           Campaign[]
+  mockDeliveries      MockCampaignDelivery[]
   whatsappConnections WhatsAppConnection[]
   createdAt           DateTime             @default(now())
 }
@@ -57,7 +58,26 @@ model Campaign {
   recipientIds Json     @default("[]")
   status       String   @default("DRAFT")
   tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  mockDeliveries MockCampaignDelivery[]
   createdAt    DateTime @default(now())
+}
+
+model MockCampaignDelivery {
+  id          String   @id @default(cuid())
+  tenantId    String
+  campaignId  String
+  contactId   String
+  status      String   @default("QUEUED")
+  mockId      String?
+  lastError   String?
+  attempts    Int      @default(0)
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@unique([campaignId, contactId])
+  @@index([tenantId, campaignId, status])
 }
 
 model WhatsAppConnection {
