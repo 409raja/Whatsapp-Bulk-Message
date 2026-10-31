@@ -246,7 +246,7 @@ export default function CampaignsManager({ token }: { token: string }) {
     <div className="campaign-stats">
       <div className="manager-metric-card">
         <span className="manager-metric-icon metric-icon-violet" aria-hidden="true">▤</span>
-        <span className="manager-metric-copy"><small>Saved drafts</small><strong>{loading && !campaigns.length ? '…' : campaigns.length}</strong></span>
+        <span className="manager-metric-copy"><small>Total campaigns</small><strong>{loading && !campaigns.length ? '…' : campaigns.length}</strong></span>
       </div>
       <div className="manager-metric-card">
         <span className="manager-metric-icon metric-icon-green" aria-hidden="true">✓</span>
