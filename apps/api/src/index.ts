@@ -8,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import whatsappSignupRouter from './whatsapp-signup';
+import { enqueueCampaign, getMockCampaignProgress } from './queue';
 
 
 const db = new PrismaClient();
@@ -469,6 +470,25 @@ app.delete('/api/v1/campaigns/:id', auth, handler(async (req: any, res: any) => 
   });
   if (!deleted.count) return res.status(404).json({ error: 'Deletable draft not found' });
   return res.json({ deleted: true });
+}));
+
+// Standalone local mock-only API. Live Meta sending is never enabled here.
+const mockEnabled = () => process.env.SEND_MODE === 'mock' && process.env.META_CAMPAIGN_SEND_ENABLED !== 'true';
+app.get('/api/v1/campaigns/mock-mode', auth, requireWhatsAppAdmin, (_req, res) => {
+  res.json({ enabled: mockEnabled() });
+});
+app.post('/api/v1/campaigns/:id/mock-start', auth, requireWhatsAppAdmin, handler(async (req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const campaign = await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId, status: 'DRAFT' } });
+  if (!campaign) return res.status(404).json({ error: 'Draft campaign not found' });
+  const result = await enqueueCampaign(campaign.id, req.user.tenantId);
+  return res.status(202).json({ ...result, mode: 'mock' });
+}));
+app.get('/api/v1/campaigns/:id/mock-progress', auth, requireWhatsAppAdmin, handler(async(req: any, res: any) => {
+  if (!mockEnabled()) return res.status(403).json({ error: 'Mock mode required' });
+  const campaign = await db.campaign.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } });
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  return res.json(await getMockCampaignProgress(campaign.id, req.user.tenantId));
 }));
 
 // Do not enable sending without approved templates, audience selection,
