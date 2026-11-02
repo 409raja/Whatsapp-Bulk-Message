@@ -558,8 +558,8 @@ export default function WhatsAppConnectionsManager({
       </div>
 
       <p style={{ marginTop: 20, color: '#666', fontSize: 13 }}>
-        Connections are saved as PENDING until onboarding
-        and activation checks are completed.
+        Connections start PENDING; successful Meta phone verification
+        can change their status to ACTIVE.
       </p>
     </section>
   );

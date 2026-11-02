@@ -16,6 +16,8 @@ type Company = {
   name: string;
   role: string;
 };
+type ConnectionSummary = { id:string; status:string; label:string };
+type PilotMode = { enabled:boolean; maxRecipients:number };
 
 // Check JWT expiry for UI session restoration.
 // Backend remains responsible for verifying JWT signatures.
@@ -56,6 +58,9 @@ export default function Home() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState('');
+  const [connections,setConnections]=useState<ConnectionSummary[]>([]);
+  const [connectionStatusError,setConnectionStatusError]=useState(false);
+  const [livePilotMode,setLivePilotMode]=useState<PilotMode>({enabled:false,maxRecipients:2});
 
   // Restore session after refresh
   useEffect(() => {
@@ -146,6 +151,41 @@ export default function Home() {
     return () => controller.abort();
   }, [token, sessionChecked]);
 
+  // Keep onboarding status based on tenant-scoped API data, not static copy.
+  useEffect(() => {
+    if (!token || !sessionChecked) {
+      setConnections([]);
+      setConnectionStatusError(false);
+      setLivePilotMode({enabled:false,maxRecipients:2});
+      return;
+    }
+    const controller=new AbortController();
+    async function loadReadiness() {
+      const headers={Authorization:'Bearer '+token};
+      try {
+        const response=await fetch(API+'/api/v1/whatsapp/connections',{headers,signal:controller.signal});
+        if(!response.ok)throw Error('Connection lookup failed');
+        const data:unknown=await response.json();
+        if(!Array.isArray(data))throw Error('Invalid connection data');
+        if(!controller.signal.aborted){setConnections(data as ConnectionSummary[]);setConnectionStatusError(false)}
+      } catch {
+        if(!controller.signal.aborted)setConnectionStatusError(true);
+      }
+      try {
+        const response=await fetch(API+'/api/v1/campaigns/live-mode',{headers,signal:controller.signal});
+        if(!response.ok)throw Error('Live pilot mode unavailable');
+        const data:PilotMode=await response.json();
+        if(!controller.signal.aborted)setLivePilotMode({enabled:data.enabled===true,maxRecipients:data.maxRecipients||2});
+      } catch {
+        if(!controller.signal.aborted)setLivePilotMode({enabled:false,maxRecipients:2});
+      }
+    }
+    void loadReadiness();
+    // Refresh after navigating back from phone verification in Campaigns.
+    const interval=setInterval(()=>{if(document.visibilityState==='visible')void loadReadiness()},15000);
+    return ()=>{controller.abort();clearInterval(interval)};
+  },[token,sessionChecked]);
+
   // Login and registration
   async function submit() {
     if (loading) return;
@@ -208,6 +248,9 @@ export default function Home() {
     setPassword('');
     setCompanies([]);
     setCompaniesError('');
+    setConnections([]);
+    setConnectionStatusError(false);
+    setLivePilotMode({enabled:false,maxRecipients:2});
     setResult('');
     setMode('login');
   }
@@ -224,6 +267,11 @@ export default function Home() {
 
   // Professional dashboard after login
   if (token) {
+    const activeConnections=connections.filter(c=>c.status==='ACTIVE');
+    const setupTitle=connectionStatusError?'Unavailable':activeConnections.length>0?'Connected':connections.length>0?'Pending verification':'Get started';
+    const setupNote=connectionStatusError?'Unable to fetch connection status':
+      activeConnections.length>0?activeConnections.length+' active WhatsApp connection(s)':
+      connections.length>0?'Connected accounts need verification':'Connect a business account to continue';
     const navigation = [
       { id: 'overview', label: 'Overview', symbol: '◫' },
       { id: 'contacts', label: 'Contacts', symbol: '♙' },
@@ -269,7 +317,7 @@ export default function Home() {
 
           <div className="saas-sidebar-footer">
             <span className="saas-footer-status"><span /> Workspace protected</span>
-            <p>Campaign sending is currently disabled.</p>
+            <p>{livePilotMode.enabled?'Restricted live pilot enabled.':'Real campaign sending is currently disabled.'}</p>
           </div>
         </aside>
 
@@ -335,10 +383,10 @@ export default function Home() {
                       <span className="saas-stat-icon saas-icon-amber" aria-hidden="true">!</span>
                     </div>
                     <div className="saas-stat-value saas-stat-value-text">
-                      Paused
+                      {livePilotMode.enabled?'Live pilot enabled':'Paused'}
                     </div>
                     <div className="saas-stat-note">
-                      Campaign sending is not enabled
+                      {livePilotMode.enabled?'Restricted pilot only (maximum '+livePilotMode.maxRecipients+' recipients)':'Real campaign sending is not enabled'}
                     </div>
                   </div>
 
@@ -348,10 +396,10 @@ export default function Home() {
                       <span className="saas-stat-icon saas-icon-blue" aria-hidden="true">↗</span>
                     </div>
                     <div className="saas-stat-value saas-stat-value-text">
-                      Get started
+                      {setupTitle}
                     </div>
                     <div className="saas-stat-note">
-                      Connect a business account to continue
+                      {setupNote}
                     </div>
                   </div>
                 </div>
@@ -406,7 +454,7 @@ export default function Home() {
                       onClick={() => setActiveSection('whatsapp')}
                     >
                       <span className="saas-quick-link-icon saas-icon-green" aria-hidden="true">◉</span>
-                      <span><strong>Connect WhatsApp</strong><small>Manage your business accounts</small></span>
+                      <span><strong>{activeConnections.length?'Manage WhatsApp':'Connect WhatsApp'}</strong><small>Manage your business accounts</small></span>
                       <span className="saas-company-arrow" aria-hidden="true">→</span>
                     </button>
                     <button
@@ -430,7 +478,7 @@ export default function Home() {
 
                 <div className="saas-notice" role="note">
                   <span className="saas-notice-icon" aria-hidden="true">i</span>
-                  <p><strong>Campaign sending is disabled.</strong> You can manage drafts and contacts; messages are not sent from this workspace.</p>
+                  <p><strong>{livePilotMode.enabled?'Live pilot mode enabled.':'Full campaign sending is disabled.'}</strong> {livePilotMode.enabled?'Only explicitly approved 1–2 recipient pilots can be started.':'Mock simulations do not send real WhatsApp messages.'}</p>
                 </div>
               </>
             )}
